@@ -158,6 +158,9 @@ function buildThreadDecorations(source: string, threads: Thread[], activeThreadI
   });
 
   for (const thread of sortedThreads) {
+    if (!thread.anchor.resolved) {
+      continue;
+    }
     const from = clamp(toCodeUnitOffset(source, thread.anchor.doc_start), 0, source.length);
     const to = clamp(toCodeUnitOffset(source, thread.anchor.doc_end), from, source.length);
     if (from === to) {

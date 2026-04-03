@@ -57,14 +57,13 @@ Then verify health again before operating on documents or sharing browser links.
 
 ```bash
 curl -fsS http://127.0.0.1:8080/api/health
-agentpad open /absolute/path/to/file.md --json
-agentpad read /absolute/path/to/file.md --quote "Old text" --prefix "Before " --suffix " after" --json > /tmp/read.json
-jq '.anchor' /tmp/read.json > /tmp/anchor.json
+agentpad inspect /absolute/path/to/file.md --json
+agentpad read /absolute/path/to/file.md --quote "Old text" --prefix "Before " --suffix " after" --anchor-only --json > /tmp/anchor.json
 agentpad edit /absolute/path/to/file.md --anchor-file /tmp/anchor.json --text "Clarified section." --json
 printf '\n\nClarified section with a real paragraph break.' > /tmp/replacement.txt
 agentpad edit /absolute/path/to/file.md --anchor-file /tmp/anchor.json --text-file /tmp/replacement.txt --json
-agentpad threads create /absolute/path/to/file.md --start 120 --end 168 --body "Clarify this section." --json
-agentpad threads list /absolute/path/to/file.md --json
+agentpad threads create /absolute/path/to/file.md --anchor-file /tmp/anchor.json --body "Clarify this section." --json
+agentpad threads list /absolute/path/to/file.md --summary --json
 ```
 
 Use smaller reads once you know the area of interest. Avoid reading the whole document when a scoped read will do.
@@ -74,7 +73,7 @@ Use smaller reads once you know the area of interest. Avoid reading the whole do
 Apply document edits through AgentPad instead of patching the file directly. Prefer anchor-first edits:
 
 ```bash
-agentpad read /absolute/path/to/file.md --quote "Old text" --prefix "Before " --suffix " after" --json
+agentpad read /absolute/path/to/file.md --quote "Old text" --prefix "Before " --suffix " after" --anchor-only --json
 agentpad edit /absolute/path/to/file.md --anchor-json '{"block_id":"...","start":0,"end":8,"doc_start":120,"doc_end":128,"quote":"Old text","revision":3}' --text "New text" --json
 printf '\n\nNew paragraph.' > /tmp/replacement.txt
 agentpad edit /absolute/path/to/file.md --anchor-file /tmp/anchor.json --text-file /tmp/replacement.txt --json
@@ -82,11 +81,54 @@ agentpad edit /absolute/path/to/file.md --anchor-file /tmp/anchor.json --text-fi
 
 Notes:
 
+- `inspect` is the cheapest way to confirm the file path, revision, title, and browser URL.
+- `open --json` returns a lightweight summary by default. Add `--include-document` only when you truly need the full document payload.
 - `read --start/--end`, `read --block`, and `read --quote ...` can all return an `anchor` in JSON output.
+- `read` omits block metadata by default. Add `--full` only when block metadata is worth the extra payload.
+- `read --anchor-only` is the fastest path when the next step is an edit or a thread creation.
 - `edit --anchor-json` and `edit --anchor-file` are the primary agent-facing edit inputs.
+- `edit --thread <thread-id>` is the preferred follow-up when you are addressing an existing comment, because AgentPad will move the thread highlight onto the replacement span.
+- `edit-many` is the preferred path for several disjoint localized edits. Prefer anchors or thread IDs inside batch edits when possible.
 - For multiline text, prefer `edit --text-file` over trying to pass `\n` through shell quoting.
 - The anchor carries the revision and quote context needed for AgentPad to resolve and rebase the edit safely.
 - Positional `edit --start/--end --base-revision ...` remains available as a low-level fallback.
+- Whole-document replacement is a last resort. Prefer the smallest anchored or thread-aware edit that keeps the diff readable.
+
+Example thread-aware edit:
+
+```bash
+agentpad threads get /absolute/path/to/file.md <thread-id> --json
+agentpad edit /absolute/path/to/file.md --thread <thread-id> --text "Updated text that addresses the comment." --json
+```
+
+Example batch localized edit payload:
+
+```json
+[
+  {
+    "anchor": {
+      "block_id": "block-1",
+      "start": 0,
+      "end": 8,
+      "doc_start": 120,
+      "doc_end": 128,
+      "quote": "Old text",
+      "revision": 3
+    },
+    "text": "New text"
+  },
+  {
+    "thread_id": "thread-123",
+    "text": "Replacement text for the commented span."
+  }
+]
+```
+
+Apply it with:
+
+```bash
+agentpad edit-many /absolute/path/to/file.md --edits-file /tmp/edits.json --json
+```
 
 ## Search and Targeting
 
@@ -109,6 +151,24 @@ agentpad read /absolute/path/to/file.md --quote "flag" --prefix "feature " --suf
 ```
 
 ## Thread Management
+
+List lightweight summaries:
+
+```bash
+agentpad threads list /absolute/path/to/file.md --summary --json
+```
+
+Fetch one thread with full comments:
+
+```bash
+agentpad threads get /absolute/path/to/file.md <thread-id> --json
+```
+
+Create a thread from an existing anchor:
+
+```bash
+agentpad threads create /absolute/path/to/file.md --anchor-file /tmp/anchor.json --body "Please clarify this paragraph." --json
+```
 
 Reply:
 
@@ -179,5 +239,7 @@ Use the configured base URL when it differs from the default. Always URL-encode 
   Add `--prefix`, `--suffix`, or `--block` so AgentPad can resolve exactly one span.
 - Anchor edit became stale:
   Re-run `agentpad read --json` to get a fresh anchor from the current document state, then retry the edit.
+- A thread highlight no longer points at visible text:
+  Fetch the thread again, then prefer `edit --thread` for the next change so AgentPad can retarget the thread highlight to the replacement span.
 - Browser link does not load the app:
   The server might not be serving the frontend at that base URL. Confirm the app is available before telling the user the link is ready.

@@ -56,10 +56,28 @@ function formatTimestamp(value: string) {
 
 function formatQuote(thread: Thread) {
   const quote = thread.anchor.quote.replace(/\s+/g, " ").trim();
+  if (!thread.anchor.resolved) {
+    if (!quote) {
+      return "Commented text changed after edits";
+    }
+    const label = `Changed after edits: ${quote}`;
+    return label.length > 88 ? `${label.slice(0, 85)}...` : label;
+  }
   if (!quote) {
     return "Commented text";
   }
   return quote.length > 88 ? `${quote.slice(0, 85)}...` : quote;
+}
+
+function threadQuoteTitle(thread: Thread) {
+  const quote = thread.anchor.quote.trim();
+  if (!thread.anchor.resolved) {
+    if (!quote) {
+      return "Commented text changed after edits. Highlight hidden until it is re-anchored.";
+    }
+    return `${quote}\n\nCommented text changed after edits. Highlight hidden until it is re-anchored.`;
+  }
+  return thread.anchor.quote;
 }
 
 function getSelectionPreview(selection: SelectionRange | null) {
@@ -251,6 +269,7 @@ export default function App() {
   const dropInputRef = useRef<HTMLInputElement | null>(null);
   const lastFocusedThreadRef = useRef<string | null>(null);
   const previousThreadsRef = useRef<Thread[]>([]);
+  const threadRefreshTimeoutRef = useRef<number | null>(null);
   const dragDepthRef = useRef(0);
   const resizeStateRef = useRef<{ startX: number; startWidth: number } | null>(null);
   const activeThreadId = route.threadId;
@@ -345,7 +364,13 @@ export default function App() {
 
   const handleThreadsArtifactHint = useEffectEvent(() => {
     if (currentDoc) {
-      void refreshThreads(currentDoc.id, "live");
+      if (threadRefreshTimeoutRef.current !== null) {
+        window.clearTimeout(threadRefreshTimeoutRef.current);
+      }
+      threadRefreshTimeoutRef.current = window.setTimeout(() => {
+        threadRefreshTimeoutRef.current = null;
+        void refreshThreads(currentDoc.id, "live");
+      }, 120);
     }
   });
 
@@ -372,6 +397,14 @@ export default function App() {
     window.addEventListener("popstate", handlePopState);
     return () => {
       window.removeEventListener("popstate", handlePopState);
+    };
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      if (threadRefreshTimeoutRef.current !== null) {
+        window.clearTimeout(threadRefreshTimeoutRef.current);
+      }
     };
   }, []);
 
@@ -481,6 +514,11 @@ export default function App() {
     }
     const thread = threads.find((item) => item.id === activeThreadId);
     if (!thread) {
+      return;
+    }
+    if (!thread.anchor.resolved) {
+      setStatus("Commented text changed after edits. Review the thread before relying on its old highlight.");
+      lastFocusedThreadRef.current = activeThreadId;
       return;
     }
     editorRef.current?.focusRange(thread.anchor.doc_start, thread.anchor.doc_end);
@@ -904,10 +942,13 @@ export default function App() {
                           <button
                             className={`thread-quote-button ${isUnread ? "thread-quote-button-unread" : ""}`}
                             onClick={() => openThread(thread.id)}
-                            title={thread.anchor.quote}
+                            title={threadQuoteTitle(thread)}
                           >
                             <span className="thread-quote">{formatQuote(thread)}</span>
                           </button>
+                          {!thread.anchor.resolved ? (
+                            <p className="thread-quote-note">Text changed after edits. Highlight hidden until it is re-anchored.</p>
+                          ) : null}
                         </blockquote>
 
                         {isActive ? (

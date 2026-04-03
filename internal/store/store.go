@@ -135,7 +135,9 @@ func (s *Store) ReadDocument(ctx context.Context, id, actor string, opts ReadOpt
 		Revision:   doc.Revision,
 		Scope:      "full",
 		Text:       doc.Source,
-		Blocks:     doc.Blocks,
+	}
+	if opts.Full {
+		result.Blocks = doc.Blocks
 	}
 	switch {
 	case opts.Quote != "":
@@ -145,7 +147,11 @@ func (s *Store) ReadDocument(ctx context.Context, id, actor string, opts ReadOpt
 			return domain.DocumentRead{}, err
 		}
 		result.Text = anchor.Quote
-		result.Blocks = relevantBlocks(doc.Blocks, anchor.DocStart, anchor.DocEnd)
+		if opts.Full {
+			result.Blocks = relevantBlocks(doc.Blocks, anchor.DocStart, anchor.DocEnd)
+		} else {
+			result.Blocks = nil
+		}
 		result.Anchor = anchor
 		return result, nil
 	case opts.Query != "":
@@ -160,13 +166,21 @@ func (s *Store) ReadDocument(ctx context.Context, id, actor string, opts ReadOpt
 		start := utf8Index(doc.Source, idx)
 		end := start + len([]rune(opts.Query))
 		result.Text = string(runes[max(0, start-80):min(len(runes), end+80)])
-		result.Blocks = relevantBlocks(doc.Blocks, start, end)
+		if opts.Full {
+			result.Blocks = relevantBlocks(doc.Blocks, start, end)
+		} else {
+			result.Blocks = nil
+		}
 	case opts.BlockID != "":
 		result.Scope = "block"
 		for _, block := range doc.Blocks {
 			if block.ID == opts.BlockID {
 				result.Text = block.Text
-				result.Blocks = []domain.Block{block}
+				if opts.Full {
+					result.Blocks = []domain.Block{block}
+				} else {
+					result.Blocks = nil
+				}
 				anchor, err := docmodel.AnchorFromSelection(doc, block.Start, block.End)
 				if err != nil {
 					return domain.DocumentRead{}, err
@@ -183,7 +197,11 @@ func (s *Store) ReadDocument(ctx context.Context, id, actor string, opts ReadOpt
 			return domain.DocumentRead{}, domain.NewError(domain.ErrCodeInvalidRequest, "range is out of bounds", 400)
 		}
 		result.Text = string(runes[opts.Start:opts.End])
-		result.Blocks = relevantBlocks(doc.Blocks, opts.Start, opts.End)
+		if opts.Full {
+			result.Blocks = relevantBlocks(doc.Blocks, opts.Start, opts.End)
+		} else {
+			result.Blocks = nil
+		}
 		anchor, err := docmodel.AnchorFromSelection(doc, opts.Start, opts.End)
 		if err != nil {
 			return domain.DocumentRead{}, err
@@ -245,6 +263,61 @@ func (s *Store) ApplyAnchorEdit(ctx context.Context, documentID string, anchor d
 		BaseRevision: doc.Revision,
 		Author:       actor,
 	})
+}
+
+func (s *Store) ApplyThreadEdit(ctx context.Context, documentID, threadID, replacement, actor string) (domain.Thread, domain.Document, collab.Op, error) {
+	_ = ctx
+	ref, err := s.resolveDocumentRef(documentID)
+	if err != nil {
+		return domain.Thread{}, domain.Document{}, collab.Op{}, err
+	}
+	unlock := s.lockDocument(ref.Key)
+	defer unlock()
+
+	doc, data, err := s.loadDocumentData(ref, actor, true)
+	if err != nil {
+		return domain.Thread{}, domain.Document{}, collab.Op{}, err
+	}
+	index := threadIndex(data.Threads, threadID)
+	if index < 0 {
+		return domain.Thread{}, domain.Document{}, collab.Op{}, domain.NewError(domain.ErrCodeDocumentNotFound, "thread not found", 404)
+	}
+
+	resolved, err := s.resolveAnchorStrictUnlocked(ref, doc, data.Threads[index].Anchor)
+	if err != nil {
+		return domain.Thread{}, domain.Document{}, collab.Op{}, domain.NewError(domain.ErrCodeInvalidAnchor, "thread anchor became stale", 409)
+	}
+	updatedDoc, canonical, err := s.applyOpUnlocked(ref, actor, collab.Op{
+		Position:     resolved.DocStart,
+		DeleteCount:  resolved.DocEnd - resolved.DocStart,
+		InsertText:   replacement,
+		BaseRevision: doc.Revision,
+		Author:       actor,
+	})
+	if err != nil {
+		return domain.Thread{}, domain.Document{}, collab.Op{}, err
+	}
+
+	_, data, err = s.loadDocumentData(ref, actor, true)
+	if err != nil {
+		return domain.Thread{}, domain.Document{}, collab.Op{}, err
+	}
+	index = threadIndex(data.Threads, threadID)
+	if index < 0 {
+		return domain.Thread{}, domain.Document{}, collab.Op{}, domain.NewError(domain.ErrCodeDocumentNotFound, "thread not found", 404)
+	}
+	newAnchor, err := docmodel.AnchorFromSelection(updatedDoc, canonical.Position, canonical.Position+len([]rune(replacement)))
+	if err != nil {
+		return domain.Thread{}, domain.Document{}, collab.Op{}, err
+	}
+	data.Threads[index].DocumentID = ref.Path
+	data.Threads[index].Anchor = *newAnchor
+	data.Threads[index].UpdatedAt = time.Now().UTC()
+	if err := s.writeSidecar(ref, data); err != nil {
+		return domain.Thread{}, domain.Document{}, collab.Op{}, err
+	}
+
+	return data.Threads[index], updatedDoc, canonical, nil
 }
 
 func (s *Store) applyOpUnlocked(ref documentRef, actor string, op collab.Op) (domain.Document, collab.Op, error) {
@@ -368,17 +441,40 @@ func (s *Store) ListThreads(ctx context.Context, documentID string, actor string
 	threads := make([]domain.Thread, 0, len(data.Threads))
 	for _, item := range data.Threads {
 		item.DocumentID = ref.Path
-		history, err := s.changesSinceUnlocked(ref, item.Anchor.Revision)
+		resolved, err := s.resolveAnchorForDisplayUnlocked(ref, doc, item.Anchor)
 		if err != nil {
 			return nil, err
 		}
-		resolved, err := docmodel.ResolveAnchor(doc, item.Anchor, history)
-		if err == nil {
-			item.Anchor = resolved
-		}
+		item.Anchor = resolved
 		threads = append(threads, item)
 	}
 	return threads, nil
+}
+
+func (s *Store) GetThread(ctx context.Context, documentID, threadID, actor string) (domain.Thread, error) {
+	_ = ctx
+	ref, err := s.resolveDocumentRef(documentID)
+	if err != nil {
+		return domain.Thread{}, err
+	}
+	unlock := s.lockDocument(ref.Key)
+	defer unlock()
+	doc, data, err := s.loadDocumentData(ref, actor, true)
+	if err != nil {
+		return domain.Thread{}, err
+	}
+	index := threadIndex(data.Threads, threadID)
+	if index < 0 {
+		return domain.Thread{}, domain.NewError(domain.ErrCodeDocumentNotFound, "thread not found", 404)
+	}
+	thread := data.Threads[index]
+	thread.DocumentID = ref.Path
+	resolved, err := s.resolveAnchorForDisplayUnlocked(ref, doc, thread.Anchor)
+	if err != nil {
+		return domain.Thread{}, err
+	}
+	thread.Anchor = resolved
+	return thread, nil
 }
 
 func (s *Store) ReplyThread(ctx context.Context, documentID, threadID, body, actor string) (domain.Thread, domain.Comment, error) {
@@ -529,14 +625,11 @@ func (s *Store) ListAnnotations(ctx context.Context, documentID, actor string) (
 	for _, item := range data.Annotations {
 		item.DocumentID = ref.Path
 		if item.Anchor != nil {
-			history, err := s.changesSinceUnlocked(ref, item.Anchor.Revision)
+			resolved, err := s.resolveAnchorForDisplayUnlocked(ref, doc, *item.Anchor)
 			if err != nil {
 				return nil, err
 			}
-			resolved, err := docmodel.ResolveAnchor(doc, *item.Anchor, history)
-			if err == nil {
-				item.Anchor = &resolved
-			}
+			item.Anchor = &resolved
 		}
 		items = append(items, item)
 	}
@@ -1448,6 +1541,23 @@ func threadIndex(items []domain.Thread, threadID string) int {
 		}
 	}
 	return -1
+}
+
+func (s *Store) resolveAnchorStrictUnlocked(ref documentRef, doc domain.Document, anchor domain.Anchor) (domain.Anchor, error) {
+	history, err := s.changesSinceUnlocked(ref, anchor.Revision)
+	if err != nil {
+		return domain.Anchor{}, err
+	}
+	return docmodel.ResolveAnchor(doc, anchor, history)
+}
+
+func (s *Store) resolveAnchorForDisplayUnlocked(ref documentRef, doc domain.Document, anchor domain.Anchor) (domain.Anchor, error) {
+	resolved, err := s.resolveAnchorStrictUnlocked(ref, doc, anchor)
+	resolved.Revision = doc.Revision
+	if err != nil {
+		return resolved, nil
+	}
+	return resolved, nil
 }
 
 func annotationIndex(items []domain.Annotation, annotationID string) int {

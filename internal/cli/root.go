@@ -13,6 +13,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"strings"
 	"time"
 
@@ -40,15 +41,33 @@ type Client struct {
 }
 
 type OpenResult struct {
-	Path     string          `json:"path"`
-	URL      string          `json:"url"`
-	Document domain.Document `json:"document"`
+	Path      string                `json:"path"`
+	URL       string                `json:"url"`
+	Title     string                `json:"title"`
+	Format    domain.DocumentFormat `json:"format"`
+	Revision  int64                 `json:"revision"`
+	UpdatedAt time.Time             `json:"updated_at"`
+	Document  *domain.Document      `json:"document,omitempty"`
 }
 
 type EditResult struct {
 	Path     string          `json:"path"`
 	Document domain.Document `json:"document"`
 	Op       collab.Op       `json:"op"`
+}
+
+type BatchEditSpec struct {
+	ThreadID string         `json:"thread_id,omitempty"`
+	Start    *int           `json:"start,omitempty"`
+	End      *int           `json:"end,omitempty"`
+	Anchor   *domain.Anchor `json:"anchor,omitempty"`
+	Text     string         `json:"text"`
+}
+
+type BatchEditResult struct {
+	Path     string          `json:"path"`
+	Document domain.Document `json:"document"`
+	Ops      []collab.Op     `json:"ops"`
 }
 
 var browserOpener = openBrowser
@@ -84,9 +103,11 @@ func NewRootCmd() *cobra.Command {
 	cmd.PersistentFlags().BoolVar(&opts.JSON, "json", false, "Emit machine-readable JSON")
 
 	cmd.AddCommand(newServeCmd(opts))
+	cmd.AddCommand(newInspectCmd(opts))
 	cmd.AddCommand(newOpenCmd(opts))
 	cmd.AddCommand(newReadCmd(opts))
 	cmd.AddCommand(newEditCmd(opts))
+	cmd.AddCommand(newEditManyCmd(opts))
 	cmd.AddCommand(newThreadsCmd(opts))
 	cmd.AddCommand(newActivityCmd(opts))
 	cmd.AddCommand(newExportCmd(opts))
@@ -105,8 +126,27 @@ func newServeCmd(opts *RootOptions) *cobra.Command {
 	}
 }
 
-func newOpenCmd(opts *RootOptions) *cobra.Command {
+func newInspectCmd(opts *RootOptions) *cobra.Command {
 	return &cobra.Command{
+		Use:   "inspect <file>",
+		Short: "Inspect a file with a lightweight summary",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			resolvedPath, err := resolveCLIPath(args[0])
+			if err != nil {
+				return err
+			}
+			result, err := inspectDocument(opts.client(), opts.ServerURL, resolvedPath)
+			if err != nil {
+				return err
+			}
+			return printValue(cmd, opts.JSON, result)
+		},
+	}
+}
+
+func newOpenCmd(opts *RootOptions) *cobra.Command {
+	cmd := &cobra.Command{
 		Use:   "open <file>",
 		Short: "Open a local file in AgentPad via the default browser",
 		Args:  cobra.ExactArgs(1),
@@ -116,24 +156,35 @@ func newOpenCmd(opts *RootOptions) *cobra.Command {
 				return err
 			}
 			client := opts.client()
-			var doc domain.Document
-			if err := client.getJSON(context.Background(), "/api/files/open", map[string]string{"path": resolvedPath}, &doc); err != nil {
-				return err
-			}
-			deepLink, err := documentURL(opts.ServerURL, doc.ID, "")
+			includeDocument, _ := cmd.Flags().GetBool("include-document")
+			result, err := inspectDocument(client, opts.ServerURL, resolvedPath)
 			if err != nil {
 				return err
 			}
-			if opts.JSON {
-				return printValue(cmd, true, OpenResult{
-					Path:     doc.ID,
-					URL:      deepLink,
-					Document: doc,
-				})
+			if includeDocument {
+				var doc domain.Document
+				if err := client.getJSON(context.Background(), "/api/files/open", map[string]string{"path": resolvedPath}, &doc); err != nil {
+					return err
+				}
+				result.Document = &doc
+				result.Title = doc.Title
+				result.Format = doc.Format
+				result.Revision = doc.Revision
+				result.UpdatedAt = doc.UpdatedAt
+				result.Path = doc.ID
+				result.URL, err = documentURL(opts.ServerURL, doc.ID, "")
+				if err != nil {
+					return err
+				}
 			}
-			return browserOpener(deepLink)
+			if opts.JSON {
+				return printValue(cmd, true, result)
+			}
+			return browserOpener(result.URL)
 		},
 	}
+	cmd.Flags().Bool("include-document", false, "Include the full document payload in JSON output")
+	return cmd
 }
 
 func newReadCmd(opts *RootOptions) *cobra.Command {
@@ -152,8 +203,15 @@ func newReadCmd(opts *RootOptions) *cobra.Command {
 			quote, _ := cmd.Flags().GetString("quote")
 			prefix, _ := cmd.Flags().GetString("prefix")
 			suffix, _ := cmd.Flags().GetString("suffix")
+			full, _ := cmd.Flags().GetBool("full")
+			anchorOnly, _ := cmd.Flags().GetBool("anchor-only")
+			textOnly, _ := cmd.Flags().GetBool("text-only")
 			start, _ := cmd.Flags().GetInt("start")
 			end, _ := cmd.Flags().GetInt("end")
+			if anchorOnly && textOnly {
+				return fmt.Errorf("only one of --anchor-only or --text-only may be used")
+			}
+			params["full"] = fmt.Sprint(full)
 			if blockID != "" {
 				params["block_id"] = blockID
 			}
@@ -179,6 +237,12 @@ func newReadCmd(opts *RootOptions) *cobra.Command {
 			if err := opts.client().getJSON(context.Background(), "/api/files/read", params, &read); err != nil {
 				return err
 			}
+			if anchorOnly {
+				return printValue(cmd, opts.JSON, read.Anchor)
+			}
+			if textOnly {
+				return printValue(cmd, opts.JSON, read.Text)
+			}
 			return printValue(cmd, opts.JSON, read)
 		},
 	}
@@ -189,6 +253,9 @@ func newReadCmd(opts *RootOptions) *cobra.Command {
 	cmd.Flags().String("suffix", "", "Expected text immediately after the quote")
 	cmd.Flags().Int("start", 0, "Range start rune offset")
 	cmd.Flags().Int("end", 0, "Range end rune offset")
+	cmd.Flags().Bool("full", false, "Include block metadata alongside the read text")
+	cmd.Flags().Bool("anchor-only", false, "Print only the resolved anchor payload")
+	cmd.Flags().Bool("text-only", false, "Print only the resolved text payload")
 	return cmd
 }
 
@@ -210,6 +277,7 @@ func newEditCmd(opts *RootOptions) *cobra.Command {
 
 			start, _ := cmd.Flags().GetInt("start")
 			end, _ := cmd.Flags().GetInt("end")
+			threadID, _ := cmd.Flags().GetString("thread")
 			insertText, err := readFlagOrFile(cmd, "text", "text-file")
 			if err != nil {
 				return err
@@ -224,15 +292,21 @@ func newEditCmd(opts *RootOptions) *cobra.Command {
 				"path":        resolvedPath,
 				"insert_text": insertText,
 			}
-			if anchor != nil {
-				if cmd.Flags().Changed("start") || cmd.Flags().Changed("end") || cmd.Flags().Changed("base-revision") {
-					return fmt.Errorf("--start, --end, and --base-revision are only valid in positional edit mode")
-				}
-				requestBody["anchor"] = anchor
-			} else {
-				if !cmd.Flags().Changed("start") || !cmd.Flags().Changed("end") {
-					return fmt.Errorf("either --anchor-json/--anchor-file or both --start and --end are required")
-				}
+				switch {
+				case threadID != "":
+					if anchor != nil || cmd.Flags().Changed("start") || cmd.Flags().Changed("end") || cmd.Flags().Changed("base-revision") {
+						return fmt.Errorf("--thread cannot be combined with anchor or positional edit flags")
+					}
+					requestBody["thread_id"] = threadID
+				case anchor != nil:
+					if cmd.Flags().Changed("start") || cmd.Flags().Changed("end") || cmd.Flags().Changed("base-revision") {
+						return fmt.Errorf("--start, --end, and --base-revision are only valid in positional edit mode")
+					}
+					requestBody["anchor"] = anchor
+				default:
+					if !cmd.Flags().Changed("start") || !cmd.Flags().Changed("end") {
+						return fmt.Errorf("either --anchor-json/--anchor-file or both --start and --end are required")
+					}
 				if start < 0 {
 					return fmt.Errorf("--start must be non-negative")
 				}
@@ -269,6 +343,7 @@ func newEditCmd(opts *RootOptions) *cobra.Command {
 	}
 	cmd.Flags().String("anchor-json", "", "Anchor payload as JSON")
 	cmd.Flags().String("anchor-file", "", "Path to a JSON file containing an anchor payload")
+	cmd.Flags().String("thread", "", "Thread ID to edit against; retargets the thread to the replacement span")
 	cmd.Flags().Int("start", 0, "Edit start rune offset")
 	cmd.Flags().Int("end", 0, "Edit end rune offset")
 	cmd.Flags().String("text", "", "Replacement text")
@@ -277,9 +352,82 @@ func newEditCmd(opts *RootOptions) *cobra.Command {
 	return cmd
 }
 
+func newEditManyCmd(opts *RootOptions) *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "edit-many <file>",
+		Short: "Apply multiple localized edits through AgentPad",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			resolvedPath, err := resolveCLIPath(args[0])
+			if err != nil {
+				return err
+			}
+			editsJSON, _ := cmd.Flags().GetString("edits-json")
+			editsFile, _ := cmd.Flags().GetString("edits-file")
+			edits, err := readBatchEditSpecs(editsJSON, editsFile)
+			if err != nil {
+				return err
+			}
+			if len(edits) == 0 {
+				return fmt.Errorf("at least one edit is required")
+			}
+			edits, err = normalizeBatchEditSpecs(edits)
+			if err != nil {
+				return err
+			}
+
+			client := opts.client()
+			summary, err := fetchDocumentSummary(client, resolvedPath)
+			if err != nil {
+				return err
+			}
+			currentRevision := summary.Revision
+			var (
+				finalDoc domain.Document
+				ops      []collab.Op
+			)
+			for _, edit := range edits {
+				requestBody := map[string]any{
+					"path":        resolvedPath,
+					"insert_text": edit.Text,
+				}
+				switch {
+				case edit.ThreadID != "":
+					requestBody["thread_id"] = edit.ThreadID
+				case edit.Anchor != nil:
+					requestBody["anchor"] = edit.Anchor
+				default:
+					requestBody["position"] = *edit.Start
+					requestBody["delete_count"] = *edit.End - *edit.Start
+					requestBody["base_revision"] = currentRevision
+				}
+				var resp struct {
+					Document domain.Document `json:"document"`
+					Op       collab.Op       `json:"op"`
+				}
+				if err := client.doJSON(context.Background(), http.MethodPost, "/api/files/edit", requestBody, &resp); err != nil {
+					return err
+				}
+				finalDoc = resp.Document
+				currentRevision = resp.Document.Revision
+				ops = append(ops, resp.Op)
+			}
+
+			return printValue(cmd, opts.JSON, BatchEditResult{
+				Path:     resolvedPath,
+				Document: finalDoc,
+				Ops:      ops,
+			})
+		},
+	}
+	cmd.Flags().String("edits-json", "", "Batch edit payload as JSON")
+	cmd.Flags().String("edits-file", "", "Path to a JSON file containing the batch edit payload")
+	return cmd
+}
+
 func newThreadsCmd(opts *RootOptions) *cobra.Command {
 	cmd := &cobra.Command{Use: "threads", Short: "Comment thread operations"}
-	cmd.AddCommand(&cobra.Command{
+	list := &cobra.Command{
 		Use:   "list <file>",
 		Short: "List threads for a file",
 		Args:  cobra.ExactArgs(1),
@@ -288,11 +436,40 @@ func newThreadsCmd(opts *RootOptions) *cobra.Command {
 			if err != nil {
 				return err
 			}
+			summary, _ := cmd.Flags().GetBool("summary")
+			if summary {
+				var items []domain.ThreadSummary
+				if err := opts.client().getJSON(context.Background(), "/api/files/threads", map[string]string{"path": resolvedPath, "summary": "true"}, &items); err != nil {
+					return err
+				}
+				return printValue(cmd, opts.JSON, items)
+			}
 			var items []domain.Thread
 			if err := opts.client().getJSON(context.Background(), "/api/files/threads", map[string]string{"path": resolvedPath}, &items); err != nil {
 				return err
 			}
 			return printValue(cmd, opts.JSON, items)
+		},
+	}
+	list.Flags().Bool("summary", false, "Return thread summaries without full comment bodies")
+	cmd.AddCommand(list)
+	cmd.AddCommand(&cobra.Command{
+		Use:   "get <file> <thread-id>",
+		Short: "Fetch a single thread",
+		Args:  cobra.ExactArgs(2),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			resolvedPath, err := resolveCLIPath(args[0])
+			if err != nil {
+				return err
+			}
+			var item domain.Thread
+			if err := opts.client().getJSON(context.Background(), "/api/files/thread", map[string]string{
+				"path":      resolvedPath,
+				"thread_id": args[1],
+			}, &item); err != nil {
+				return err
+			}
+			return printValue(cmd, opts.JSON, item)
 		},
 	})
 	create := &cobra.Command{
@@ -304,19 +481,36 @@ func newThreadsCmd(opts *RootOptions) *cobra.Command {
 			if err != nil {
 				return err
 			}
+			anchorJSON, _ := cmd.Flags().GetString("anchor-json")
+			anchorFile, _ := cmd.Flags().GetString("anchor-file")
+			anchor, err := readAnchorInput(anchorJSON, anchorFile)
+			if err != nil {
+				return err
+			}
 			body, err := readFlagOrFile(cmd, "body", "body-file")
 			if err != nil {
 				return err
 			}
 			start, _ := cmd.Flags().GetInt("start")
 			end, _ := cmd.Flags().GetInt("end")
+			requestBody := map[string]any{
+				"path": resolvedPath,
+				"body": body,
+			}
+			if anchor != nil {
+				if cmd.Flags().Changed("start") || cmd.Flags().Changed("end") {
+					return fmt.Errorf("--start and --end cannot be combined with --anchor-json/--anchor-file")
+				}
+				requestBody["anchor"] = anchor
+			} else {
+				if !cmd.Flags().Changed("start") || !cmd.Flags().Changed("end") {
+					return fmt.Errorf("either --anchor-json/--anchor-file or both --start and --end are required")
+				}
+				requestBody["start"] = start
+				requestBody["end"] = end
+			}
 			var thread domain.Thread
-			if err := opts.client().doJSON(context.Background(), http.MethodPost, "/api/files/threads", map[string]any{
-				"path":  resolvedPath,
-				"body":  body,
-				"start": start,
-				"end":   end,
-			}, &thread); err != nil {
+			if err := opts.client().doJSON(context.Background(), http.MethodPost, "/api/files/threads", requestBody, &thread); err != nil {
 				return err
 			}
 			return printValue(cmd, opts.JSON, thread)
@@ -324,6 +518,8 @@ func newThreadsCmd(opts *RootOptions) *cobra.Command {
 	}
 	create.Flags().String("body", "", "Comment body")
 	create.Flags().String("body-file", "", "Read comment body from a file ('-' for stdin)")
+	create.Flags().String("anchor-json", "", "Anchor payload as JSON")
+	create.Flags().String("anchor-file", "", "Path to a JSON file containing an anchor payload")
 	create.Flags().Int("start", 0, "Selection start")
 	create.Flags().Int("end", 0, "Selection end")
 	cmd.AddCommand(create)
@@ -584,10 +780,18 @@ func printValue(cmd *cobra.Command, asJSON bool, value any) error {
 	switch v := value.(type) {
 	case domain.Document:
 		fmt.Fprintf(cmd.OutOrStdout(), "%s\t%s\trev=%d\t%s\n", v.ID, v.Title, v.Revision, v.Format)
+	case domain.DocumentSummary:
+		fmt.Fprintf(cmd.OutOrStdout(), "%s\t%s\trev=%d\t%s\n", v.ID, v.Title, v.Revision, v.Format)
+	case OpenResult:
+		fmt.Fprintf(cmd.OutOrStdout(), "%s\t%s\trev=%d\t%s\t%s\n", v.Path, v.Title, v.Revision, v.Format, v.URL)
 	case EditResult:
 		fmt.Fprintf(cmd.OutOrStdout(), "%s\trev=%d\tpos=%d\tdel=%d\n", v.Path, v.Document.Revision, v.Op.Position, v.Op.DeleteCount)
+	case BatchEditResult:
+		fmt.Fprintf(cmd.OutOrStdout(), "%s\trev=%d\tedits=%d\n", v.Path, v.Document.Revision, len(v.Ops))
 	case domain.DocumentRead:
 		fmt.Fprintln(cmd.OutOrStdout(), v.Text)
+	case string:
+		fmt.Fprintln(cmd.OutOrStdout(), v)
 	default:
 		data, err := json.MarshalIndent(value, "", "  ")
 		if err != nil {
@@ -712,6 +916,115 @@ func documentURL(baseURL, path, threadID string) (string, error) {
 	}
 	parsed.RawQuery = values.Encode()
 	return parsed.String(), nil
+}
+
+func inspectDocument(client *Client, serverURL, path string) (OpenResult, error) {
+	summary, err := fetchDocumentSummary(client, path)
+	if err != nil {
+		return OpenResult{}, err
+	}
+	deepLink, err := documentURL(serverURL, summary.ID, "")
+	if err != nil {
+		return OpenResult{}, err
+	}
+	return OpenResult{
+		Path:      summary.ID,
+		URL:       deepLink,
+		Title:     summary.Title,
+		Format:    summary.Format,
+		Revision:  summary.Revision,
+		UpdatedAt: summary.UpdatedAt,
+	}, nil
+}
+
+func fetchDocumentSummary(client *Client, path string) (domain.DocumentSummary, error) {
+	var summary domain.DocumentSummary
+	if err := client.getJSON(context.Background(), "/api/files/open", map[string]string{
+		"path": path,
+		"full": "false",
+	}, &summary); err != nil {
+		return domain.DocumentSummary{}, err
+	}
+	return summary, nil
+}
+
+func readBatchEditSpecs(rawJSON, path string) ([]BatchEditSpec, error) {
+	if rawJSON != "" && path != "" {
+		return nil, fmt.Errorf("only one of --edits-json or --edits-file may be used")
+	}
+	var body []byte
+	switch {
+	case rawJSON != "":
+		body = []byte(rawJSON)
+	case path != "":
+		var err error
+		body, err = os.ReadFile(path)
+		if err != nil {
+			return nil, err
+		}
+	default:
+		return nil, fmt.Errorf("either --edits-json or --edits-file is required")
+	}
+	var edits []BatchEditSpec
+	if err := json.Unmarshal(body, &edits); err == nil {
+		return edits, nil
+	}
+	var wrapped struct {
+		Edits []BatchEditSpec `json:"edits"`
+	}
+	if err := json.Unmarshal(body, &wrapped); err != nil {
+		return nil, fmt.Errorf("decode batch edits: %w", err)
+	}
+	return wrapped.Edits, nil
+}
+
+func normalizeBatchEditSpecs(edits []BatchEditSpec) ([]BatchEditSpec, error) {
+	normalized := append([]BatchEditSpec(nil), edits...)
+	allPositional := true
+	for index, edit := range normalized {
+		selectors := 0
+		if edit.ThreadID != "" {
+			selectors++
+		}
+		if edit.Anchor != nil {
+			selectors++
+		}
+		if edit.Start != nil || edit.End != nil {
+			if edit.Start == nil || edit.End == nil {
+				return nil, fmt.Errorf("batch edit %d must include both start and end", index)
+			}
+			if *edit.Start < 0 {
+				return nil, fmt.Errorf("batch edit %d has a negative start", index)
+			}
+			if *edit.End < *edit.Start {
+				return nil, fmt.Errorf("batch edit %d has end before start", index)
+			}
+			selectors++
+		}
+		if selectors != 1 {
+			return nil, fmt.Errorf("batch edit %d must specify exactly one selector: thread_id, anchor, or start/end", index)
+		}
+		if edit.ThreadID != "" || edit.Anchor != nil {
+			allPositional = false
+		}
+	}
+	if !allPositional {
+		return normalized, nil
+	}
+	sort.SliceStable(normalized, func(i, j int) bool {
+		if *normalized[i].Start != *normalized[j].Start {
+			return *normalized[i].Start > *normalized[j].Start
+		}
+		return *normalized[i].End > *normalized[j].End
+	})
+	for index := 1; index < len(normalized); index++ {
+		previous := normalized[index-1]
+		current := normalized[index]
+		if *previous.Start < *current.End {
+			return nil, fmt.Errorf("positional batch edits overlap; use anchors or thread IDs for ambiguous local edits")
+		}
+	}
+	return normalized, nil
 }
 
 func openBrowser(rawURL string) error {

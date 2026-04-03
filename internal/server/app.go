@@ -40,6 +40,7 @@ func (a *App) Routes() http.Handler {
 	mux.HandleFunc("GET /api/files/read", a.handleReadFile)
 	mux.HandleFunc("POST /api/files/edit", a.handleEditFile)
 	mux.HandleFunc("GET /api/files/threads", a.handleListThreads)
+	mux.HandleFunc("GET /api/files/thread", a.handleGetThread)
 	mux.HandleFunc("POST /api/files/threads", a.handleCreateThread)
 	mux.HandleFunc("POST /api/files/thread-replies", a.handleReplyThread)
 	mux.HandleFunc("POST /api/files/thread-resolve", a.handleResolveThread)
@@ -83,6 +84,16 @@ func (a *App) handleOpenFile(w http.ResponseWriter, r *http.Request) {
 		writeError(w, err)
 		return
 	}
+	if r.URL.Query().Get("full") == "false" {
+		writeJSON(w, http.StatusOK, domain.DocumentSummary{
+			ID:        doc.ID,
+			Title:     doc.Title,
+			Format:    doc.Format,
+			Revision:  doc.Revision,
+			UpdatedAt: doc.UpdatedAt,
+		})
+		return
+	}
 	writeJSON(w, http.StatusOK, doc)
 }
 
@@ -114,18 +125,28 @@ func (a *App) handleEditFile(w http.ResponseWriter, r *http.Request) {
 		InsertText   string         `json:"insert_text"`
 		BaseRevision int64          `json:"base_revision"`
 		Anchor       *domain.Anchor `json:"anchor"`
+		ThreadID     string         `json:"thread_id"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(w, domain.NewError(domain.ErrCodeInvalidRequest, err.Error(), 400))
+		return
+	}
+	if req.ThreadID != "" && (req.Anchor != nil || req.BaseRevision != 0 || req.DeleteCount != 0 || req.Position != 0) {
+		writeError(w, domain.NewError(domain.ErrCodeInvalidRequest, "thread edits cannot be combined with anchor or positional edit fields", 400))
 		return
 	}
 	var (
 		actor     = actorFromRequest(r)
 		doc       domain.Document
 		canonical collab.Op
+		thread    *domain.Thread
 		err       error
 	)
-	if req.Anchor != nil {
+	if req.ThreadID != "" {
+		var updatedThread domain.Thread
+		updatedThread, doc, canonical, err = a.store.ApplyThreadEdit(r.Context(), req.Path, req.ThreadID, req.InsertText, actor)
+		thread = &updatedThread
+	} else if req.Anchor != nil {
 		doc, canonical, err = a.store.ApplyAnchorEdit(r.Context(), req.Path, *req.Anchor, req.InsertText, actor)
 	} else {
 		doc, canonical, err = a.store.ApplyOp(r.Context(), req.Path, collab.Op{
@@ -142,7 +163,15 @@ func (a *App) handleEditFile(w http.ResponseWriter, r *http.Request) {
 	}
 	canonical.Author = actor
 	a.hub.NotifyOpApplied(doc.ID, doc.Revision, canonical)
-	writeJSON(w, http.StatusOK, map[string]any{"document": doc, "op": canonical})
+	a.hub.NotifyDocument(doc.ID, "threads", map[string]any{
+		"revision":  doc.Revision,
+		"thread_id": req.ThreadID,
+	})
+	response := map[string]any{"document": doc, "op": canonical}
+	if thread != nil {
+		response["thread"] = *thread
+	}
+	writeJSON(w, http.StatusOK, response)
 }
 
 func (a *App) handleListThreads(w http.ResponseWriter, r *http.Request) {
@@ -151,7 +180,24 @@ func (a *App) handleListThreads(w http.ResponseWriter, r *http.Request) {
 		writeError(w, err)
 		return
 	}
+	if r.URL.Query().Get("summary") == "true" {
+		summaries := make([]domain.ThreadSummary, 0, len(items))
+		for _, item := range items {
+			summaries = append(summaries, summarizeThread(item))
+		}
+		writeJSON(w, http.StatusOK, summaries)
+		return
+	}
 	writeJSON(w, http.StatusOK, items)
+}
+
+func (a *App) handleGetThread(w http.ResponseWriter, r *http.Request) {
+	thread, err := a.store.GetThread(r.Context(), requiredPath(r), r.URL.Query().Get("thread_id"), actorFromRequest(r))
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, thread)
 }
 
 func (a *App) handleCreateThread(w http.ResponseWriter, r *http.Request) {
@@ -345,4 +391,24 @@ func contentTypeForFormat(format domain.DocumentFormat) string {
 	default:
 		return "text/plain; charset=utf-8"
 	}
+}
+
+func summarizeThread(thread domain.Thread) domain.ThreadSummary {
+	summary := domain.ThreadSummary{
+		ID:           thread.ID,
+		DocumentID:   thread.DocumentID,
+		Anchor:       thread.Anchor,
+		Status:       thread.Status,
+		Author:       thread.Author,
+		CreatedAt:    thread.CreatedAt,
+		UpdatedAt:    thread.UpdatedAt,
+		CommentCount: len(thread.Comments),
+	}
+	if count := len(thread.Comments); count > 0 {
+		last := thread.Comments[count-1]
+		summary.LastCommentID = last.ID
+		summary.LastCommentBy = last.Author
+		summary.LastCommentAt = &last.CreatedAt
+	}
+	return summary
 }

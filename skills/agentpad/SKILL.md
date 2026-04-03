@@ -23,7 +23,10 @@ Use this skill when the task is about reviewing or operating on a local document
 - Use `--json` when another agent or script may need to parse the result.
 - Prefer AgentPad whenever the user wants collaboration, comments, or review on a local doc, because the threaded UI is the best place for them to read and respond.
 - After creating, replying to, resolving, or reopening comments, give the user an AgentPad browser link to the document so they can open it and inspect the thread state themselves.
-- For content edits, prefer the anchor-first flow: use `agentpad read --json` to get an `anchor`, then pass that anchor into `agentpad edit` so concurrent changes can rebase through AgentPad instead of being overwritten.
+- For content edits, prefer the smallest localized edit that solves the task. Do not replace the whole document unless the user explicitly wants a rewrite or most of the file is genuinely changing.
+- Prefer the anchor-first flow: use `agentpad read --json` to get an `anchor`, then pass that anchor into `agentpad edit` so concurrent changes can rebase through AgentPad instead of being overwritten.
+- If you are addressing a specific comment thread, prefer `agentpad edit --thread <thread-id>` so AgentPad can retarget the thread highlight to the replacement span.
+- When several disjoint sections need changes, prefer `agentpad edit-many` with multiple localized edits instead of a single full-document replacement.
 
 ## Runner Selection
 
@@ -39,12 +42,18 @@ Use this skill when the task is about reviewing or operating on a local document
    `agentpad serve`
    Then verify health again before proceeding.
 4. Confirm the CLI can reach the server:
-   `agentpad open /absolute/path/to/file.md --json`
+   `agentpad inspect /absolute/path/to/file.md --json`
 5. Read only the scope needed for the task before commenting or exporting, and prefer a read mode that returns a reusable anchor:
    `agentpad read /absolute/path/to/file.md --start 10 --end 40 --json`
    `agentpad read /absolute/path/to/file.md --quote "old text" --prefix "before " --suffix " after" --json`
+   If you only need the anchor itself, prefer:
+   `agentpad read /absolute/path/to/file.md --quote "old text" --prefix "before " --suffix " after" --anchor-only --json`
 6. If the task requires a document content change, perform it through AgentPad only by reusing the returned anchor:
    `agentpad edit /absolute/path/to/file.md --anchor-json '<anchor-json>' --text "replacement text" --json`
+   If you are responding to a specific comment:
+   `agentpad edit /absolute/path/to/file.md --thread <thread-id> --text "replacement text" --json`
+   If you need multiple disjoint edits:
+   `agentpad edit-many /absolute/path/to/file.md --edits-file /tmp/edits.json --json`
    For multiline inserts or replacements, prefer `--text-file` so paragraph breaks are real newlines instead of shell-escaped `\n` literals.
 7. Use thread commands for review feedback instead of editing sidecar metadata directly.
 8. Build a browser deep link with the document path:
@@ -55,25 +64,34 @@ Use this skill when the task is about reviewing or operating on a local document
 
 ## Common Commands
 
+- Inspect a file without loading the full document payload:
+  `agentpad inspect /absolute/path/to/file.md --json`
 - Open a file:
   `agentpad open /absolute/path/to/file.md --json`
+  `agentpad open /absolute/path/to/file.md --include-document --json`
 - Read a file or a narrow range:
   `agentpad read /absolute/path/to/file.md --json`
   `agentpad read /absolute/path/to/file.md --start 10 --end 40 --json`
   `agentpad read /absolute/path/to/file.md --quote "old text" --prefix "before " --suffix " after" --json`
+  `agentpad read /absolute/path/to/file.md --quote "old text" --prefix "before " --suffix " after" --anchor-only --json`
 - Edit a file through AgentPad:
   `agentpad edit /absolute/path/to/file.md --anchor-json '<anchor-json>' --text "replacement text" --json`
   `agentpad edit /absolute/path/to/file.md --anchor-file /tmp/anchor.json --text "replacement text" --json`
   `agentpad edit /absolute/path/to/file.md --anchor-file /tmp/anchor.json --text-file /tmp/replacement.txt --json`
+  `agentpad edit /absolute/path/to/file.md --thread <thread-id> --text "replacement text" --json`
   `agentpad edit /absolute/path/to/file.md --start 10 --end 40 --text "replacement text" --base-revision <revision> --json`
+  `agentpad edit-many /absolute/path/to/file.md --edits-file /tmp/edits.json --json`
 - Search or target a block:
   `agentpad read /absolute/path/to/file.md --query "heading text" --json`
   `agentpad read /absolute/path/to/file.md --block <block-id> --json`
 - List threads:
   `agentpad threads list /absolute/path/to/file.md --json`
+  `agentpad threads list /absolute/path/to/file.md --summary --json`
+  `agentpad threads get /absolute/path/to/file.md <thread-id> --json`
 - Create a thread:
   `agentpad threads create /absolute/path/to/file.md --start 10 --end 40 --body "Comment text" --json`
   `agentpad threads create /absolute/path/to/file.md --start 10 --end 40 --body-file /tmp/comment.txt --json`
+  `agentpad threads create /absolute/path/to/file.md --anchor-file /tmp/anchor.json --body "Comment text" --json`
 - Reply to a thread:
   `agentpad threads reply /absolute/path/to/file.md <thread-id> --body "Reply text" --json`
   `agentpad threads reply /absolute/path/to/file.md <thread-id> --body-file /tmp/reply.txt --json`
@@ -101,6 +119,7 @@ For extended command patterns and troubleshooting, read [references/cli-referenc
 - If the wrong actor name appears, inspect config and override with `--name <name>` only when needed.
 - If the wrong server URL appears, inspect `agentpad.toml` and override with `--server <base-url>` only when needed.
 - If the task needs to edit or mention a precise span, prefer `read` first so the anchor, offsets, and revision you use for `edit` or `threads create` are grounded in current content.
+- If a comment highlight drifts after edits, prefer `threads get` or `threads list --summary` to inspect the current thread state, then use `edit --thread` for the follow-up change instead of reusing stale positional offsets.
 - If the browser link opens a blank or missing app shell, the server may not be serving the web app yet. Make that clear to the user instead of silently omitting the link.
 
 ## Reporting

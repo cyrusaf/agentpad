@@ -277,6 +277,87 @@ func TestApplyAnchorEditReturnsStaleAnchorError(t *testing.T) {
 	}
 }
 
+func TestListThreadsMarksAnchorUnresolvedAfterQuotedTextIsReplaced(t *testing.T) {
+	ctx := context.Background()
+	st, _ := openTestStore(t)
+	docPath := writeTestDocument(t, t.TempDir(), "plan.md", "# Title\n\nHello world.\n")
+
+	doc, err := st.OpenDocument(ctx, docPath, "tester")
+	if err != nil {
+		t.Fatalf("open document: %v", err)
+	}
+	anchor, err := docmodel.AnchorFromSelection(doc, 15, 20)
+	if err != nil {
+		t.Fatalf("anchor selection: %v", err)
+	}
+	if _, err := st.CreateThread(ctx, doc.ID, *anchor, "Keep this grounded", "reviewer"); err != nil {
+		t.Fatalf("create thread: %v", err)
+	}
+	if _, _, err := st.ApplyOp(ctx, doc.ID, collab.Op{
+		Position:     15,
+		DeleteCount:  5,
+		InsertText:   "team",
+		BaseRevision: doc.Revision,
+	}, "editor"); err != nil {
+		t.Fatalf("apply op: %v", err)
+	}
+
+	threads, err := st.ListThreads(ctx, doc.ID, "tester")
+	if err != nil {
+		t.Fatalf("list threads: %v", err)
+	}
+	if len(threads) != 1 {
+		t.Fatalf("expected one thread, got %d", len(threads))
+	}
+	if threads[0].Anchor.Resolved {
+		t.Fatalf("expected thread anchor to be unresolved after replacement, got %+v", threads[0].Anchor)
+	}
+	if threads[0].Anchor.Quote != "world" {
+		t.Fatalf("expected original quote to be preserved, got %+v", threads[0].Anchor)
+	}
+}
+
+func TestApplyThreadEditRetargetsThreadToReplacementText(t *testing.T) {
+	ctx := context.Background()
+	st, _ := openTestStore(t)
+	docPath := writeTestDocument(t, t.TempDir(), "plan.md", "# Title\n\nHello world.\n")
+
+	doc, err := st.OpenDocument(ctx, docPath, "tester")
+	if err != nil {
+		t.Fatalf("open document: %v", err)
+	}
+	anchor, err := docmodel.AnchorFromSelection(doc, 15, 20)
+	if err != nil {
+		t.Fatalf("anchor selection: %v", err)
+	}
+	thread, err := st.CreateThread(ctx, doc.ID, *anchor, "Replace this", "reviewer")
+	if err != nil {
+		t.Fatalf("create thread: %v", err)
+	}
+
+	updatedThread, updatedDoc, op, err := st.ApplyThreadEdit(ctx, doc.ID, thread.ID, "team", "editor")
+	if err != nil {
+		t.Fatalf("apply thread edit: %v", err)
+	}
+	if !strings.Contains(updatedDoc.Source, "Hello team.") {
+		t.Fatalf("expected updated document source, got %q", updatedDoc.Source)
+	}
+	if op.Position != 15 || op.DeleteCount != 5 {
+		t.Fatalf("expected canonical replace op, got %+v", op)
+	}
+	if !updatedThread.Anchor.Resolved || updatedThread.Anchor.Quote != "team" {
+		t.Fatalf("expected thread anchor to retarget to replacement text, got %+v", updatedThread.Anchor)
+	}
+
+	refetched, err := st.GetThread(ctx, doc.ID, thread.ID, "tester")
+	if err != nil {
+		t.Fatalf("get thread: %v", err)
+	}
+	if refetched.Anchor.Quote != "team" || !refetched.Anchor.Resolved {
+		t.Fatalf("expected persisted retargeted anchor, got %+v", refetched.Anchor)
+	}
+}
+
 func TestBlockIDsStableAcrossReopen(t *testing.T) {
 	ctx := context.Background()
 	st, root := openTestStore(t)

@@ -135,6 +135,7 @@ func (h *Hub) HandleLive(w http.ResponseWriter, r *http.Request) {
 			}
 			_ = client.send(serverMessage{Type: "op.ack", Revision: doc.Revision, Op: &canonical})
 			h.broadcast(documentID, client.id, serverMessage{Type: "op.applied", Revision: doc.Revision, Op: &canonical})
+			h.NotifyDocument(documentID, "threads", map[string]any{"revision": doc.Revision})
 		}
 	}
 }

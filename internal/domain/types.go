@@ -108,6 +108,20 @@ type Thread struct {
 	Comments   []Comment    `json:"comments"`
 }
 
+type ThreadSummary struct {
+	ID              string       `json:"id"`
+	DocumentID      string       `json:"document_id"`
+	Anchor          Anchor       `json:"anchor"`
+	Status          ThreadStatus `json:"status"`
+	Author          string       `json:"author"`
+	CreatedAt       time.Time    `json:"created_at"`
+	UpdatedAt       time.Time    `json:"updated_at"`
+	CommentCount    int          `json:"comment_count"`
+	LastCommentID   string       `json:"last_comment_id,omitempty"`
+	LastCommentBy   string       `json:"last_comment_by,omitempty"`
+	LastCommentAt   *time.Time   `json:"last_comment_at,omitempty"`
+}
+
 type Annotation struct {
 	ID         string         `json:"id"`
 	DocumentID string         `json:"document_id"`

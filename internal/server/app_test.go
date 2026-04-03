@@ -206,6 +206,95 @@ func TestEditEndpointAppliesAnchorEdit(t *testing.T) {
 	}
 }
 
+func TestOpenEndpointSupportsSummaryMode(t *testing.T) {
+	st, err := store.Open(t.TempDir())
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+
+	docPath := filepath.Join(t.TempDir(), "doc.md")
+	if err := os.WriteFile(docPath, []byte("# Title\n\nHello world"), 0o644); err != nil {
+		t.Fatalf("write document: %v", err)
+	}
+	doc, err := st.OpenDocument(context.Background(), docPath, "tester")
+	if err != nil {
+		t.Fatalf("open document: %v", err)
+	}
+
+	app := New(st, "")
+	server := httptest.NewServer(app.Routes())
+	t.Cleanup(server.Close)
+
+	resp, err := http.Get(server.URL + "/api/files/open?path=" + url.QueryEscape(doc.ID) + "&full=false")
+	if err != nil {
+		t.Fatalf("open summary request failed: %v", err)
+	}
+	defer resp.Body.Close()
+
+	var summary domain.DocumentSummary
+	if err := json.NewDecoder(resp.Body).Decode(&summary); err != nil {
+		t.Fatalf("decode summary: %v", err)
+	}
+	if summary.ID != doc.ID || summary.Title != doc.Title || summary.Revision != doc.Revision {
+		t.Fatalf("unexpected summary payload: %+v", summary)
+	}
+}
+
+func TestEditEndpointSupportsThreadAwareEdit(t *testing.T) {
+	st, err := store.Open(t.TempDir())
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+
+	docPath := filepath.Join(t.TempDir(), "doc.md")
+	if err := os.WriteFile(docPath, []byte("# Title\n\nHello world"), 0o644); err != nil {
+		t.Fatalf("write document: %v", err)
+	}
+	doc, err := st.OpenDocument(context.Background(), docPath, "tester")
+	if err != nil {
+		t.Fatalf("open document: %v", err)
+	}
+	anchor, err := docmodel.AnchorFromSelection(doc, 9, 14)
+	if err != nil {
+		t.Fatalf("anchor selection: %v", err)
+	}
+	thread, err := st.CreateThread(context.Background(), doc.ID, *anchor, "Replace this", "tester")
+	if err != nil {
+		t.Fatalf("create thread: %v", err)
+	}
+
+	app := New(st, "")
+	server := httptest.NewServer(app.Routes())
+	t.Cleanup(server.Close)
+
+	editPayload := map[string]any{
+		"path":        doc.ID,
+		"thread_id":   thread.ID,
+		"insert_text": "Team",
+	}
+	resp, err := postJSON(server.URL+"/api/files/edit", editPayload)
+	if err != nil {
+		t.Fatalf("thread edit request failed: %v", err)
+	}
+	defer resp.Body.Close()
+
+	var result struct {
+		Document domain.Document `json:"document"`
+		Thread   domain.Thread   `json:"thread"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		t.Fatalf("decode thread edit response: %v", err)
+	}
+	if !strings.Contains(result.Document.Source, "Team world") {
+		t.Fatalf("expected updated source in response, got %q", result.Document.Source)
+	}
+	if result.Thread.Anchor.Quote != "Team" || !result.Thread.Anchor.Resolved {
+		t.Fatalf("expected thread anchor to retarget, got %+v", result.Thread.Anchor)
+	}
+}
+
 func postJSON(url string, payload any) (*http.Response, error) {
 	body, err := json.Marshal(payload)
 	if err != nil {

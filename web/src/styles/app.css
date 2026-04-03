@@ -682,6 +682,13 @@ p {
   color: #374151;
 }
 
+.thread-quote-note {
+  margin: 0.35rem 0 0;
+  font-size: 0.76rem;
+  line-height: 1.35;
+  color: #92400e;
+}
+
 .thread-detail {
   display: grid;
   gap: 0.5rem;

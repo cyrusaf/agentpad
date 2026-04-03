@@ -41,6 +41,10 @@ func AnchorFromSelection(doc domain.Document, start, end int) (*domain.Anchor, e
 		Prefix:   string(sourceRunes[prefixStart:start]),
 		Suffix:   string(sourceRunes[end:suffixEnd]),
 		Revision: doc.Revision,
+		Resolved: true,
+	}
+	if block.ID != "" {
+		anchor.ResolvedBlockID = block.ID
 	}
 	return anchor, nil
 }
@@ -55,6 +59,7 @@ func ResolveAnchor(doc domain.Document, anchor domain.Anchor, history []collab.O
 	}
 	current.DocStart = start
 	current.DocEnd = end
+	current.Revision = doc.Revision
 	if end < start {
 		end = start
 	}
@@ -71,8 +76,11 @@ func ResolveAnchor(doc domain.Document, anchor domain.Anchor, history []collab.O
 	}
 
 	if repaired, ok := repairByQuote(doc, anchor); ok {
+		repaired.Revision = doc.Revision
 		return repaired, nil
 	}
+	current.Resolved = false
+	current.ResolvedBlockID = ""
 	return current, domain.NewError(domain.ErrCodeInvalidAnchor, "anchor could not be resolved", 400)
 }
 
