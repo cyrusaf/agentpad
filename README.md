@@ -28,6 +28,12 @@ go install github.com/cyrusaf/agentpad@latest
 agentpad install-skill
 ```
 
+The installed skill is intentionally small. The detailed Codex workflow now lives in:
+
+```bash
+agentpad agent-usage
+```
+
 ### 2. Start AgentPad
 
 ```bash
@@ -48,10 +54,7 @@ That opens the local file in the AgentPad UI so you can read it, comment on it, 
 
 ```text
 Use $agentpad to review /path/to/file.md in AgentPad.
-Start the AgentPad server if needed.
-Reply in existing AgentPad threads instead of editing sidecar metadata directly.
-When you need to update the document, use agentpad read --json to get an anchor and then use agentpad edit with that anchor.
-For multiline inserts or replies, prefer agentpad edit --text-file / agentpad threads reply --body-file so real newlines are preserved.
+Run `agentpad agent-usage` first and follow that workflow.
 ```
 
 ## Advanced CLI Flow
@@ -75,7 +78,7 @@ Low-level `edit --start/--end --base-revision ...` still exists, but anchor-firs
 
 ## Install The Skill Manually
 
-`agentpad install-skill` is the fastest path. If you want to install from a local checkout manually instead, link [skills/agentpad/SKILL.md](skills/agentpad/SKILL.md) into `${CODEX_HOME:-$HOME/.codex}/skills/agentpad`.
+`agentpad install-skill` is the fastest path. It installs a small routing skill that points Codex at `agentpad agent-usage` for the current workflow. If you want to install from a local checkout manually instead, link [skills/agentpad/SKILL.md](skills/agentpad/SKILL.md) into `${CODEX_HOME:-$HOME/.codex}/skills/agentpad`.
 
 ## Config
 

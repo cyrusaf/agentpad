@@ -21,4 +21,5 @@ Do all of the following without asking follow-up questions:
 `I added the rollout KPI and rollback threshold to the Goal section.`
 
 Use the installed `agentpad` CLI and the AgentPad skill workflow instead of editing AgentPad metadata directly.
+Run `agentpad agent-usage` first if that command is available.
 If you need to insert a paragraph break, do not pass literal `\n` escapes through `--text`; use `agentpad edit --text-file` with real newlines.

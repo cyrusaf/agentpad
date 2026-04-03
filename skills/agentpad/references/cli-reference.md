@@ -1,6 +1,8 @@
 # AgentPad CLI Reference
 
-Use this reference when the task needs concrete command patterns, config discovery reminders, or troubleshooting details beyond the core skill.
+The canonical agent workflow now lives in `agentpad agent-usage`.
+
+Use this reference when that command is unavailable or when the task needs extra command patterns, config reminders, or troubleshooting details beyond the core skill.
 
 ## Defaults
 

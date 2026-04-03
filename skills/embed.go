@@ -4,5 +4,5 @@ import "embed"
 
 // FS contains the bundled AgentPad skill files for installation into Codex.
 //
-//go:embed agentpad/SKILL.md agentpad/agents/openai.yaml agentpad/references/cli-reference.md
+//go:embed agentpad/SKILL.md agentpad/agents/openai.yaml agentpad/references/agent-usage.md
 var FS embed.FS

@@ -118,6 +118,45 @@ func TestInspectJSONReturnsSummary(t *testing.T) {
 	}
 }
 
+func TestAgentUsagePrintsCodexWorkflow(t *testing.T) {
+	cmd := NewRootCmd()
+	var stdout bytes.Buffer
+	cmd.SetOut(&stdout)
+	cmd.SetErr(&stdout)
+	cmd.SetArgs([]string{"agent-usage"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("execute cli: %v", err)
+	}
+	output := stdout.String()
+	if !strings.Contains(output, "# AgentPad Agent Usage") {
+		t.Fatalf("expected heading in output, got %s", output)
+	}
+	if !strings.Contains(output, "agentpad inspect /absolute/path/to/file.md --json") {
+		t.Fatalf("expected inspect guidance in output, got %s", output)
+	}
+	if !strings.Contains(output, "agentpad threads list /absolute/path/to/file.md --summary --json") {
+		t.Fatalf("expected thread summary guidance in output, got %s", output)
+	}
+}
+
+func TestAgentUsageJSON(t *testing.T) {
+	cmd := NewRootCmd()
+	var stdout bytes.Buffer
+	cmd.SetOut(&stdout)
+	cmd.SetErr(&stdout)
+	cmd.SetArgs([]string{"--json", "agent-usage"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("execute cli: %v", err)
+	}
+	output := stdout.String()
+	if !strings.Contains(output, `"agent": "codex"`) {
+		t.Fatalf("expected agent metadata in output, got %s", output)
+	}
+	if !strings.Contains(output, `"instructions":`) {
+		t.Fatalf("expected instructions in output, got %s", output)
+	}
+}
+
 func TestOpenLaunchesBrowserForRelativePath(t *testing.T) {
 	st, err := store.Open(t.TempDir())
 	if err != nil {
@@ -707,6 +746,19 @@ func TestEditManyAppliesBatchLocalizedEdits(t *testing.T) {
 
 func TestInstallSkillWritesBundledFiles(t *testing.T) {
 	targetSkillsDir := filepath.Join(t.TempDir(), "skills")
+	skillDir := filepath.Join(targetSkillsDir, "agentpad")
+	if err := os.MkdirAll(filepath.Join(skillDir, "references"), 0o755); err != nil {
+		t.Fatalf("seed old skill directories: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(skillDir, "SKILL.md"), []byte("old skill body"), 0o644); err != nil {
+		t.Fatalf("seed old skill body: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(skillDir, "references", "cli-reference.md"), []byte("old reference"), 0o644); err != nil {
+		t.Fatalf("seed old reference: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(skillDir, "custom.txt"), []byte("keep me"), 0o644); err != nil {
+		t.Fatalf("seed custom file: %v", err)
+	}
 
 	cmd := NewRootCmd()
 	var stdout bytes.Buffer
@@ -717,16 +769,37 @@ func TestInstallSkillWritesBundledFiles(t *testing.T) {
 		t.Fatalf("execute cli: %v", err)
 	}
 
-	skillDir := filepath.Join(targetSkillsDir, "agentpad")
 	expectedFiles := []string{
 		filepath.Join(skillDir, "SKILL.md"),
 		filepath.Join(skillDir, "agents", "openai.yaml"),
-		filepath.Join(skillDir, "references", "cli-reference.md"),
 	}
 	for _, path := range expectedFiles {
 		if _, err := os.Stat(path); err != nil {
 			t.Fatalf("expected installed file %s: %v", path, err)
 		}
+	}
+	if _, err := os.Stat(filepath.Join(skillDir, "references", "cli-reference.md")); !os.IsNotExist(err) {
+		t.Fatalf("expected install-skill to avoid shipping the long reference, got err=%v", err)
+	}
+	customBody, err := os.ReadFile(filepath.Join(skillDir, "custom.txt"))
+	if err != nil {
+		t.Fatalf("expected custom file to be preserved: %v", err)
+	}
+	if string(customBody) != "keep me" {
+		t.Fatalf("expected custom file to stay untouched, got %q", string(customBody))
+	}
+	skillBody, err := os.ReadFile(filepath.Join(skillDir, "SKILL.md"))
+	if err != nil {
+		t.Fatalf("read installed skill: %v", err)
+	}
+	if !strings.Contains(string(skillBody), "`agentpad agent-usage`") {
+		t.Fatalf("expected installed skill to point at agent-usage, got %s", string(skillBody))
+	}
+	if strings.Contains(string(skillBody), "## Core Rules") || strings.Contains(string(skillBody), "## Current Instructions") {
+		t.Fatalf("expected installed skill to avoid duplicated guidance, got %s", string(skillBody))
+	}
+	if strings.Contains(string(skillBody), "## Common Commands") {
+		t.Fatalf("expected installed skill to stay minimal, got %s", string(skillBody))
 	}
 	if !strings.Contains(stdout.String(), `"installed_to":`) {
 		t.Fatalf("expected install metadata in output, got %s", stdout.String())

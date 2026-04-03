@@ -1,4 +1,4 @@
 interface:
   display_name: "AgentPad"
   short_description: "Operate AgentPad local files through the server-backed CLI"
-  default_prompt: "Use $agentpad when a local document should be reviewed or discussed in AgentPad, start `agentpad serve` if needed, use the installed CLI for thread actions, and report the doc deep link plus any thread IDs you touched."
+  default_prompt: "Use $agentpad when a local document should be reviewed or discussed in AgentPad. Run `agentpad agent-usage` for the current workflow, start `agentpad serve` if needed, use the installed CLI for thread actions, and report the doc deep link plus any thread IDs you touched."

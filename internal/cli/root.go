@@ -50,6 +50,12 @@ type OpenResult struct {
 	Document  *domain.Document      `json:"document,omitempty"`
 }
 
+type AgentUsageResult struct {
+	Agent        string `json:"agent"`
+	Format       string `json:"format"`
+	Instructions string `json:"instructions"`
+}
+
 type EditResult struct {
 	Path     string          `json:"path"`
 	Document domain.Document `json:"document"`
@@ -111,6 +117,7 @@ func NewRootCmd() *cobra.Command {
 	cmd.AddCommand(newThreadsCmd(opts))
 	cmd.AddCommand(newActivityCmd(opts))
 	cmd.AddCommand(newExportCmd(opts))
+	cmd.AddCommand(newAgentUsageCmd(opts))
 	cmd.AddCommand(newInstallSkillCmd(opts))
 	return cmd
 }
@@ -124,6 +131,32 @@ func newServeCmd(opts *RootOptions) *cobra.Command {
 			return server.Run(opts.Config)
 		},
 	}
+}
+
+func newAgentUsageCmd(opts *RootOptions) *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "agent-usage",
+		Short: "Print the canonical agent workflow for AgentPad",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			agent, _ := cmd.Flags().GetString("agent")
+			instructions, err := renderAgentUsage(agent)
+			if err != nil {
+				return err
+			}
+			result := AgentUsageResult{
+				Agent:        agent,
+				Format:       "markdown",
+				Instructions: instructions,
+			}
+			if opts.JSON {
+				return printValue(cmd, true, result)
+			}
+			_, err = fmt.Fprintln(cmd.OutOrStdout(), instructions)
+			return err
+		},
+	}
+	cmd.Flags().String("agent", "codex", "Agent profile to print instructions for")
+	return cmd
 }
 
 func newInspectCmd(opts *RootOptions) *cobra.Command {
@@ -292,21 +325,21 @@ func newEditCmd(opts *RootOptions) *cobra.Command {
 				"path":        resolvedPath,
 				"insert_text": insertText,
 			}
-				switch {
-				case threadID != "":
-					if anchor != nil || cmd.Flags().Changed("start") || cmd.Flags().Changed("end") || cmd.Flags().Changed("base-revision") {
-						return fmt.Errorf("--thread cannot be combined with anchor or positional edit flags")
-					}
-					requestBody["thread_id"] = threadID
-				case anchor != nil:
-					if cmd.Flags().Changed("start") || cmd.Flags().Changed("end") || cmd.Flags().Changed("base-revision") {
-						return fmt.Errorf("--start, --end, and --base-revision are only valid in positional edit mode")
-					}
-					requestBody["anchor"] = anchor
-				default:
-					if !cmd.Flags().Changed("start") || !cmd.Flags().Changed("end") {
-						return fmt.Errorf("either --anchor-json/--anchor-file or both --start and --end are required")
-					}
+			switch {
+			case threadID != "":
+				if anchor != nil || cmd.Flags().Changed("start") || cmd.Flags().Changed("end") || cmd.Flags().Changed("base-revision") {
+					return fmt.Errorf("--thread cannot be combined with anchor or positional edit flags")
+				}
+				requestBody["thread_id"] = threadID
+			case anchor != nil:
+				if cmd.Flags().Changed("start") || cmd.Flags().Changed("end") || cmd.Flags().Changed("base-revision") {
+					return fmt.Errorf("--start, --end, and --base-revision are only valid in positional edit mode")
+				}
+				requestBody["anchor"] = anchor
+			default:
+				if !cmd.Flags().Changed("start") || !cmd.Flags().Changed("end") {
+					return fmt.Errorf("either --anchor-json/--anchor-file or both --start and --end are required")
+				}
 				if start < 0 {
 					return fmt.Errorf("--start must be non-negative")
 				}
@@ -684,6 +717,19 @@ func newInstallSkillCmd(opts *RootOptions) *cobra.Command {
 	return cmd
 }
 
+func renderAgentUsage(agent string) (string, error) {
+	switch strings.TrimSpace(agent) {
+	case "", "codex":
+		body, err := fs.ReadFile(skillassets.FS, "agentpad/references/agent-usage.md")
+		if err != nil {
+			return "", fmt.Errorf("read embedded agent usage: %w", err)
+		}
+		return strings.TrimSpace(string(body)) + "\n", nil
+	default:
+		return "", fmt.Errorf("unsupported agent profile %q", agent)
+	}
+}
+
 func (opts *RootOptions) client() *Client {
 	return &Client{
 		baseURL: strings.TrimSuffix(opts.ServerURL, "/"),
@@ -859,46 +905,76 @@ func defaultCodexSkillsDir() (string, error) {
 
 func installBundledSkill(targetDir string) (int, error) {
 	const skillRoot = "agentpad"
+	bundledFiles := []string{
+		"agentpad/SKILL.md",
+		"agentpad/agents/openai.yaml",
+	}
+	legacyManagedFiles := []string{
+		"agentpad/references/cli-reference.md",
+	}
 
 	if err := os.MkdirAll(targetDir, 0o755); err != nil {
 		return 0, fmt.Errorf("create skill directory: %w", err)
 	}
+	if err := removeStaleBundledSkillFiles(targetDir, skillRoot, bundledFiles, legacyManagedFiles); err != nil {
+		return 0, err
+	}
 
 	filesWritten := 0
-	if err := fs.WalkDir(skillassets.FS, skillRoot, func(path string, d fs.DirEntry, err error) error {
+	for _, path := range bundledFiles {
+		relativePath, err := filepath.Rel(skillRoot, path)
 		if err != nil {
-			return err
+			return filesWritten, err
+		}
+		destinationPath := filepath.Join(targetDir, filepath.FromSlash(relativePath))
+		body, err := fs.ReadFile(skillassets.FS, path)
+		if err != nil {
+			return filesWritten, err
+		}
+		if err := os.MkdirAll(filepath.Dir(destinationPath), 0o755); err != nil {
+			return filesWritten, err
+		}
+		if err := os.WriteFile(destinationPath, body, 0o644); err != nil {
+			return filesWritten, err
+		}
+		filesWritten++
+	}
+	return filesWritten, nil
+}
+
+func removeStaleBundledSkillFiles(targetDir, skillRoot string, bundledFiles, legacyManagedFiles []string) error {
+	current := make(map[string]struct{}, len(bundledFiles))
+	for _, path := range bundledFiles {
+		current[path] = struct{}{}
+	}
+	for _, path := range legacyManagedFiles {
+		if _, ok := current[path]; ok {
+			continue
 		}
 		relativePath, err := filepath.Rel(skillRoot, path)
 		if err != nil {
 			return err
 		}
-		if relativePath == "." {
-			return nil
-		}
-
 		destinationPath := filepath.Join(targetDir, filepath.FromSlash(relativePath))
-		if d.IsDir() {
-			return os.MkdirAll(destinationPath, 0o755)
+		if err := os.Remove(destinationPath); err != nil && !os.IsNotExist(err) {
+			return fmt.Errorf("remove stale skill asset %s: %w", destinationPath, err)
 		}
-
-		body, err := fs.ReadFile(skillassets.FS, path)
-		if err != nil {
-			return err
-		}
-		if err := os.MkdirAll(filepath.Dir(destinationPath), 0o755); err != nil {
-			return err
-		}
-		if err := os.WriteFile(destinationPath, body, 0o644); err != nil {
-			return err
-		}
-		filesWritten++
-		return nil
-	}); err != nil {
-		return filesWritten, fmt.Errorf("install skill assets: %w", err)
+		pruneEmptyParents(filepath.Dir(destinationPath), targetDir)
 	}
+	return nil
+}
 
-	return filesWritten, nil
+func pruneEmptyParents(path, stop string) {
+	for {
+		if path == stop || path == "." || path == string(filepath.Separator) {
+			return
+		}
+		err := os.Remove(path)
+		if err != nil {
+			return
+		}
+		path = filepath.Dir(path)
+	}
 }
 
 func documentURL(baseURL, path, threadID string) (string, error) {
