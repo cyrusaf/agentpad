@@ -43,13 +43,14 @@ test("updates thread state live when the CLI changes it", async ({ page }) => {
 
     await expect(page.getByRole("heading", { name: "websocket-thread" })).toBeVisible();
     await expect(page.getByText("Live").first()).toBeVisible();
-    await expect(page.getByText("No comments yet")).toBeVisible();
+    await expect(page.getByText("No open comments")).toBeVisible();
 
     const created = await runCLI(["threads", "create", docPath, "--start", "9", "--end", "19", "--body", "CLI comment"]);
     const threadId = String(created.id ?? "");
     const threadCard = page.locator("[data-thread-card]").first();
 
     await expect(threadCard).toBeVisible();
+    await expect(page.locator(".cm-thread-highlight")).toHaveCount(1);
     await expect(threadCard.getByText("1 comment")).toBeVisible();
     await expect(threadCard.locator(".thread-unread-badge")).toHaveText("1 new");
     await expect(threadCard.getByText("Alpha beta")).toBeVisible();
@@ -64,12 +65,16 @@ test("updates thread state live when the CLI changes it", async ({ page }) => {
     await expect(threadCard.locator(".thread-unread-badge")).toHaveCount(0);
 
     await runCLI(["threads", "resolve", docPath, threadId]);
+    await expect(page.locator(".cm-thread-highlight")).toHaveCount(0);
     await expect(threadCard.locator(".thread-state")).toHaveText("resolved");
     await expect(threadCard.getByRole("button", { name: "Reopen" })).toBeVisible();
+    await expect(page.getByRole("tab", { name: /resolved/i })).toHaveAttribute("aria-selected", "true");
 
     await runCLI(["threads", "reopen", docPath, threadId]);
+    await expect(page.locator(".cm-thread-highlight")).toHaveCount(1);
     await expect(threadCard.locator(".thread-state")).toHaveText("open");
     await expect(threadCard.getByRole("button", { name: "Resolve" })).toBeVisible();
+    await expect(page.getByRole("tab", { name: /open/i })).toHaveAttribute("aria-selected", "true");
   } finally {
     await fs.rm(tempDir, { recursive: true, force: true });
   }

@@ -11,6 +11,8 @@ interface RouteState {
   threadId: string | null;
 }
 
+type CommentsView = "open" | "resolved";
+
 const COMMENTS_WIDTH_STORAGE_KEY = "agentpad.commentsWidth";
 const DEFAULT_COMMENTS_WIDTH = 560;
 const MIN_COMMENTS_WIDTH = 360;
@@ -52,6 +54,10 @@ function formatTimestamp(value: string) {
     hour: "numeric",
     minute: "2-digit",
   });
+}
+
+function sortThreadsByUpdatedAt(left: Thread, right: Thread) {
+  return right.updated_at.localeCompare(left.updated_at);
 }
 
 function formatQuote(thread: Thread) {
@@ -265,6 +271,7 @@ export default function App() {
   const [dropActive, setDropActive] = useState(false);
   const [commentsWidth, setCommentsWidth] = useState(() => readStoredCommentsWidth());
   const [commentsCollapsed, setCommentsCollapsed] = useState(false);
+  const [commentsView, setCommentsView] = useState<CommentsView>("open");
   const editorRef = useRef<EditorPaneHandle | null>(null);
   const dropInputRef = useRef<HTMLInputElement | null>(null);
   const lastFocusedThreadRef = useRef<string | null>(null);
@@ -273,13 +280,17 @@ export default function App() {
   const dragDepthRef = useRef(0);
   const resizeStateRef = useRef<{ startX: number; startWidth: number } | null>(null);
   const activeThreadId = route.threadId;
-  const orderedThreads = [...threads].sort((left, right) => {
-    if (left.status !== right.status) {
-      return left.status === "open" ? -1 : 1;
-    }
-    return right.updated_at.localeCompare(left.updated_at);
-  });
-  const activeThread = orderedThreads.find((thread) => thread.id === activeThreadId) ?? null;
+  const openThreads = threads.filter((thread) => thread.status === "open").sort(sortThreadsByUpdatedAt);
+  const resolvedThreads = threads.filter((thread) => thread.status === "resolved").sort(sortThreadsByUpdatedAt);
+  const visibleThreads = commentsView === "open" ? openThreads : resolvedThreads;
+  const activeThread = threads.find((thread) => thread.id === activeThreadId) ?? null;
+  const activeVisibleThread = visibleThreads.find((thread) => thread.id === activeThreadId) ?? null;
+  const highlightThreads =
+    commentsView === "open"
+      ? openThreads
+      : activeThread && activeThread.status === "resolved"
+        ? [activeThread]
+        : [];
   const selectionPreview = getSelectionPreview(selection);
   const composerStyle = getComposerStyle(selection);
 
@@ -451,7 +462,16 @@ export default function App() {
     previousThreadsRef.current = [];
     setUnreadThreadIds(new Set());
     setUnreadCommentIds(new Set());
+    setCommentsView("open");
   }, [route.path]);
+
+  useEffect(() => {
+    if (!activeThread) {
+      return;
+    }
+    const nextView = activeThread.status === "resolved" ? "resolved" : "open";
+    setCommentsView((current) => (current === nextView ? current : nextView));
+  }, [activeThread]);
 
   useEffect(() => {
     const path = route.path;
@@ -612,9 +632,24 @@ export default function App() {
     if (!currentDoc) {
       return;
     }
+    const thread = threads.find((item) => item.id === threadID);
+    if (thread) {
+      setCommentsView(thread.status);
+    }
     clearThreadUnread(threadID, threads);
     setCommentsCollapsed(false);
     navigateTo({ path: currentDoc.id, threadId: threadID }, "replace");
+  }
+
+  function showCommentsView(nextView: CommentsView) {
+    if (!currentDoc) {
+      setCommentsView(nextView);
+      return;
+    }
+    if (activeThread && activeThread.status !== nextView) {
+      navigateTo({ path: currentDoc.id, threadId: null }, "replace");
+    }
+    setCommentsView(nextView);
   }
 
   function clearRoute() {
@@ -772,7 +807,7 @@ export default function App() {
   const docLayoutStyle = {
     "--comments-sidebar-width": `${commentsWidth}px`,
   } as CSSProperties;
-  const commentsToggleLabel = commentsCollapsed ? `Show comments (${orderedThreads.length})` : "Hide comments";
+  const commentsToggleLabel = commentsCollapsed ? `Show comments (${visibleThreads.length})` : "Hide comments";
 
   return (
     <div
@@ -878,7 +913,7 @@ export default function App() {
             ref={editorRef}
             document={currentDoc}
             actor={actor}
-            threads={orderedThreads}
+            threads={highlightThreads}
             activeThreadId={activeThreadId}
             onThreadSelect={openThread}
             onSelectionChange={setSelection}
@@ -909,17 +944,44 @@ export default function App() {
                   <p className="eyebrow">Discussion</p>
                   <h2>Comments</h2>
                 </div>
-                <span className="status-tag">{orderedThreads.length}</span>
+                <span className="status-tag">{visibleThreads.length}</span>
               </div>
 
-              {orderedThreads.length === 0 ? (
+              <div className="thread-view-tabs" role="tablist" aria-label="Comment visibility">
+                <button
+                  type="button"
+                  role="tab"
+                  aria-selected={commentsView === "open"}
+                  className={`thread-view-tab ${commentsView === "open" ? "thread-view-tab-active" : ""}`}
+                  onClick={() => showCommentsView("open")}
+                >
+                  Open
+                  <span className="thread-view-tab-count">{openThreads.length}</span>
+                </button>
+                <button
+                  type="button"
+                  role="tab"
+                  aria-selected={commentsView === "resolved"}
+                  className={`thread-view-tab ${commentsView === "resolved" ? "thread-view-tab-active" : ""}`}
+                  onClick={() => showCommentsView("resolved")}
+                >
+                  Resolved
+                  <span className="thread-view-tab-count">{resolvedThreads.length}</span>
+                </button>
+              </div>
+
+              {visibleThreads.length === 0 ? (
                 <div className="empty-state">
-                  <h3>No comments yet</h3>
-                  <p>Select text in the editor to start a thread.</p>
+                  <h3>{commentsView === "open" ? "No open comments" : "No resolved comments"}</h3>
+                  <p>
+                    {commentsView === "open"
+                      ? "Select text in the editor to start a thread."
+                      : "Resolved threads will appear here."}
+                  </p>
                 </div>
               ) : (
                 <div className="thread-list">
-                  {orderedThreads.map((thread) => {
+                  {visibleThreads.map((thread) => {
                     const isActive = thread.id === activeThreadId;
                     const unreadCommentCount = (thread.comments ?? []).filter((comment) => unreadCommentIds.has(comment.id)).length;
                     const isUnread = unreadThreadIds.has(thread.id) || unreadCommentCount > 0;
@@ -997,7 +1059,7 @@ export default function App() {
                 </div>
               )}
 
-              {activeThread ? <div className="sidebar-footer">Active thread by {activeThread.author}</div> : null}
+              {activeVisibleThread ? <div className="sidebar-footer">Active thread by {activeVisibleThread.author}</div> : null}
             </aside>
           </>
         ) : null}
