@@ -31,27 +31,23 @@ Then run Codex with the AgentPad skill on a local file:
 
 ```text
 Use $agentpad to review /path/to/file in AgentPad.
+Start the AgentPad server if needed.
+When you need to update the document, use agentpad read --json to get an anchor and then use agentpad edit with that anchor.
+For multiline inserts or replies, prefer agentpad edit --text-file / agentpad threads reply --body-file so real newlines are preserved.
+Reply in existing AgentPad threads instead of editing sidecar metadata directly.
 ```
 
-## What It Feels Like
-
-Imagine a coding agent drafts `plan.md` for a checkout migration:
-
-- the agent writes the plan to a real file on disk
-- you open that file in AgentPad
-- you leave comments like "split this into two PRs" or "define the rollback signal"
-- AgentPad gives you a browser link back to the document and thread
-- the human and the agent review the same file instead of copying feedback back and forth
-
-AgentPad keeps the source file on disk as the source of truth and stores collaboration metadata under `~/.agentpad`.
-
 ## CLI Example
+
+The CLI is primarily for the agent to use when interacting with AgentPad.
 
 ```bash
 agentpad open ./plan.md
 agentpad open ./plan.md --json
 agentpad read ./plan.md --quote "rollback signal" --prefix "define the " --json
 agentpad edit ./plan.md --anchor-file /tmp/anchor.json --text "rollback threshold" --json
+printf '\n\nrollback threshold' > /tmp/replacement.txt
+agentpad edit ./plan.md --anchor-file /tmp/anchor.json --text-file /tmp/replacement.txt --json
 agentpad threads create ./plan.md --start 120 --end 168 --body "Split this into two PRs." --json
 ```
 
@@ -59,16 +55,13 @@ For agent-driven edits, the preferred flow is:
 
 1. `agentpad read ... --json` to get a reusable `anchor`
 2. `agentpad edit ... --anchor-json/--anchor-file --text ...` to apply the edit through AgentPad's collab engine
+3. For multiline text, use `--text-file` or `--body-file` instead of shell-escaped `\n`
 
 Low-level `edit --start/--end --base-revision ...` still exists, but anchor-first editing is the safer default for concurrent human + agent work.
 
 ## Install The Skill Manually
 
 `agentpad install-skill` is the fastest path. If you want to install from a local checkout manually instead, link [skills/agentpad/SKILL.md](skills/agentpad/SKILL.md) into `${CODEX_HOME:-$HOME/.codex}/skills/agentpad`.
-
-## Demo Generation
-
-Demo generation instructions live in [docs/demo.md](docs/demo.md).
 
 ## Config
 

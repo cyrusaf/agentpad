@@ -61,6 +61,8 @@ agentpad open /absolute/path/to/file.md --json
 agentpad read /absolute/path/to/file.md --quote "Old text" --prefix "Before " --suffix " after" --json > /tmp/read.json
 jq '.anchor' /tmp/read.json > /tmp/anchor.json
 agentpad edit /absolute/path/to/file.md --anchor-file /tmp/anchor.json --text "Clarified section." --json
+printf '\n\nClarified section with a real paragraph break.' > /tmp/replacement.txt
+agentpad edit /absolute/path/to/file.md --anchor-file /tmp/anchor.json --text-file /tmp/replacement.txt --json
 agentpad threads create /absolute/path/to/file.md --start 120 --end 168 --body "Clarify this section." --json
 agentpad threads list /absolute/path/to/file.md --json
 ```
@@ -74,12 +76,15 @@ Apply document edits through AgentPad instead of patching the file directly. Pre
 ```bash
 agentpad read /absolute/path/to/file.md --quote "Old text" --prefix "Before " --suffix " after" --json
 agentpad edit /absolute/path/to/file.md --anchor-json '{"block_id":"...","start":0,"end":8,"doc_start":120,"doc_end":128,"quote":"Old text","revision":3}' --text "New text" --json
+printf '\n\nNew paragraph.' > /tmp/replacement.txt
+agentpad edit /absolute/path/to/file.md --anchor-file /tmp/anchor.json --text-file /tmp/replacement.txt --json
 ```
 
 Notes:
 
 - `read --start/--end`, `read --block`, and `read --quote ...` can all return an `anchor` in JSON output.
 - `edit --anchor-json` and `edit --anchor-file` are the primary agent-facing edit inputs.
+- For multiline text, prefer `edit --text-file` over trying to pass `\n` through shell quoting.
 - The anchor carries the revision and quote context needed for AgentPad to resolve and rebase the edit safely.
 - Positional `edit --start/--end --base-revision ...` remains available as a low-level fallback.
 
@@ -109,6 +114,8 @@ Reply:
 
 ```bash
 agentpad threads reply /absolute/path/to/file.md <thread-id> --body "Handled in the latest draft." --json
+printf 'Handled in the latest draft.\n\nAdded detail in a second paragraph.' > /tmp/reply.txt
+agentpad threads reply /absolute/path/to/file.md <thread-id> --body-file /tmp/reply.txt --json
 ```
 
 Resolve:

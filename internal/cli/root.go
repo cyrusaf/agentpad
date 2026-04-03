@@ -210,7 +210,10 @@ func newEditCmd(opts *RootOptions) *cobra.Command {
 
 			start, _ := cmd.Flags().GetInt("start")
 			end, _ := cmd.Flags().GetInt("end")
-			insertText, _ := cmd.Flags().GetString("text")
+			insertText, err := readFlagOrFile(cmd, "text", "text-file")
+			if err != nil {
+				return err
+			}
 			baseRevision, _ := cmd.Flags().GetInt64("base-revision")
 			anchor, err := readAnchorInput(anchorJSON, anchorFile)
 			if err != nil {
@@ -269,6 +272,7 @@ func newEditCmd(opts *RootOptions) *cobra.Command {
 	cmd.Flags().Int("start", 0, "Edit start rune offset")
 	cmd.Flags().Int("end", 0, "Edit end rune offset")
 	cmd.Flags().String("text", "", "Replacement text")
+	cmd.Flags().String("text-file", "", "Read replacement text from a file ('-' for stdin)")
 	cmd.Flags().Int64("base-revision", 0, "Document revision the edit is based on")
 	return cmd
 }
@@ -300,7 +304,10 @@ func newThreadsCmd(opts *RootOptions) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			body, _ := cmd.Flags().GetString("body")
+			body, err := readFlagOrFile(cmd, "body", "body-file")
+			if err != nil {
+				return err
+			}
 			start, _ := cmd.Flags().GetInt("start")
 			end, _ := cmd.Flags().GetInt("end")
 			var thread domain.Thread
@@ -316,6 +323,7 @@ func newThreadsCmd(opts *RootOptions) *cobra.Command {
 		},
 	}
 	create.Flags().String("body", "", "Comment body")
+	create.Flags().String("body-file", "", "Read comment body from a file ('-' for stdin)")
 	create.Flags().Int("start", 0, "Selection start")
 	create.Flags().Int("end", 0, "Selection end")
 	cmd.AddCommand(create)
@@ -328,7 +336,10 @@ func newThreadsCmd(opts *RootOptions) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			body, _ := cmd.Flags().GetString("body")
+			body, err := readFlagOrFile(cmd, "body", "body-file")
+			if err != nil {
+				return err
+			}
 			var resp map[string]any
 			if err := opts.client().doJSON(context.Background(), http.MethodPost, "/api/files/thread-replies", map[string]any{
 				"path":      resolvedPath,
@@ -341,10 +352,34 @@ func newThreadsCmd(opts *RootOptions) *cobra.Command {
 		},
 	}
 	reply.Flags().String("body", "", "Reply body")
+	reply.Flags().String("body-file", "", "Read reply body from a file ('-' for stdin)")
 	cmd.AddCommand(reply)
 	cmd.AddCommand(threadStatusCmd(opts, "resolve", "/api/files/thread-resolve"))
 	cmd.AddCommand(threadStatusCmd(opts, "reopen", "/api/files/thread-reopen"))
 	return cmd
+}
+
+func readFlagOrFile(cmd *cobra.Command, valueFlag, fileFlag string) (string, error) {
+	value, _ := cmd.Flags().GetString(valueFlag)
+	filePath, _ := cmd.Flags().GetString(fileFlag)
+	if value != "" && filePath != "" {
+		return "", fmt.Errorf("only one of --%s or --%s may be used", valueFlag, fileFlag)
+	}
+	if filePath == "" {
+		return value, nil
+	}
+	if filePath == "-" {
+		body, err := io.ReadAll(cmd.InOrStdin())
+		if err != nil {
+			return "", fmt.Errorf("read --%s stdin: %w", fileFlag, err)
+		}
+		return string(body), nil
+	}
+	body, err := os.ReadFile(filePath)
+	if err != nil {
+		return "", fmt.Errorf("read --%s %s: %w", fileFlag, filePath, err)
+	}
+	return string(body), nil
 }
 
 func threadStatusCmd(opts *RootOptions, action, endpoint string) *cobra.Command {

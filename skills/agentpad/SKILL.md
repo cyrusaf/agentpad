@@ -45,6 +45,7 @@ Use this skill when the task is about reviewing or operating on a local document
    `agentpad read /absolute/path/to/file.md --quote "old text" --prefix "before " --suffix " after" --json`
 6. If the task requires a document content change, perform it through AgentPad only by reusing the returned anchor:
    `agentpad edit /absolute/path/to/file.md --anchor-json '<anchor-json>' --text "replacement text" --json`
+   For multiline inserts or replacements, prefer `--text-file` so paragraph breaks are real newlines instead of shell-escaped `\n` literals.
 7. Use thread commands for review feedback instead of editing sidecar metadata directly.
 8. Build a browser deep link with the document path:
    `http://127.0.0.1:8080/?path=%2Fabsolute%2Fpath%2Fto%2Ffile.md`
@@ -63,6 +64,7 @@ Use this skill when the task is about reviewing or operating on a local document
 - Edit a file through AgentPad:
   `agentpad edit /absolute/path/to/file.md --anchor-json '<anchor-json>' --text "replacement text" --json`
   `agentpad edit /absolute/path/to/file.md --anchor-file /tmp/anchor.json --text "replacement text" --json`
+  `agentpad edit /absolute/path/to/file.md --anchor-file /tmp/anchor.json --text-file /tmp/replacement.txt --json`
   `agentpad edit /absolute/path/to/file.md --start 10 --end 40 --text "replacement text" --base-revision <revision> --json`
 - Search or target a block:
   `agentpad read /absolute/path/to/file.md --query "heading text" --json`
@@ -71,8 +73,10 @@ Use this skill when the task is about reviewing or operating on a local document
   `agentpad threads list /absolute/path/to/file.md --json`
 - Create a thread:
   `agentpad threads create /absolute/path/to/file.md --start 10 --end 40 --body "Comment text" --json`
+  `agentpad threads create /absolute/path/to/file.md --start 10 --end 40 --body-file /tmp/comment.txt --json`
 - Reply to a thread:
   `agentpad threads reply /absolute/path/to/file.md <thread-id> --body "Reply text" --json`
+  `agentpad threads reply /absolute/path/to/file.md <thread-id> --body-file /tmp/reply.txt --json`
 - Resolve or reopen:
   `agentpad threads resolve /absolute/path/to/file.md <thread-id> --json`
   `agentpad threads reopen /absolute/path/to/file.md <thread-id> --json`

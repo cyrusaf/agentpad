@@ -284,6 +284,107 @@ func TestEditJSONAppliesAnchorWrite(t *testing.T) {
 	}
 }
 
+func TestEditJSONReadsReplacementTextFromFile(t *testing.T) {
+	st, err := store.Open(t.TempDir())
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+
+	docPath := filepath.Join(t.TempDir(), "one.md")
+	if err := os.WriteFile(docPath, []byte("# Title\n\nHello world"), 0o644); err != nil {
+		t.Fatalf("seed document: %v", err)
+	}
+	textPath := filepath.Join(t.TempDir(), "replacement.txt")
+	replacement := "\n\nSuccess metric: keep p95 reconciliation lag under 5 minutes."
+	if err := os.WriteFile(textPath, []byte(replacement), 0o644); err != nil {
+		t.Fatalf("write replacement file: %v", err)
+	}
+
+	app := server.New(st, "")
+	ts := httptest.NewServer(app.Routes())
+	t.Cleanup(ts.Close)
+
+	cmd := NewRootCmd()
+	var stdout bytes.Buffer
+	cmd.SetOut(&stdout)
+	cmd.SetErr(&stdout)
+	cmd.SetArgs([]string{
+		"--server", ts.URL,
+		"--actor", "tester",
+		"--json",
+		"edit", docPath,
+		"--start", "14",
+		"--end", "14",
+		"--text-file", textPath,
+	})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("execute cli: %v", err)
+	}
+
+	updatedBody, err := os.ReadFile(docPath)
+	if err != nil {
+		t.Fatalf("read edited file: %v", err)
+	}
+	if !strings.Contains(string(updatedBody), replacement+" world") {
+		t.Fatalf("expected multiline insertion from file, got %q", string(updatedBody))
+	}
+}
+
+func TestThreadsReplyReadsBodyFromFile(t *testing.T) {
+	st, err := store.Open(t.TempDir())
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+
+	docPath := filepath.Join(t.TempDir(), "one.md")
+	if err := os.WriteFile(docPath, []byte("# Title\n\nHello world"), 0o644); err != nil {
+		t.Fatalf("seed document: %v", err)
+	}
+
+	doc, err := st.OpenDocument(context.Background(), docPath, "tester")
+	if err != nil {
+		t.Fatalf("open document: %v", err)
+	}
+	anchor, err := docmodel.AnchorFromSelection(doc, 9, 14)
+	if err != nil {
+		t.Fatalf("anchor selection: %v", err)
+	}
+	thread, err := st.CreateThread(context.Background(), doc.ID, *anchor, "Please update this.", "human")
+	if err != nil {
+		t.Fatalf("create thread: %v", err)
+	}
+
+	replyPath := filepath.Join(t.TempDir(), "reply.txt")
+	replyBody := "Handled.\n\nI updated the section."
+	if err := os.WriteFile(replyPath, []byte(replyBody), 0o644); err != nil {
+		t.Fatalf("write reply file: %v", err)
+	}
+
+	app := server.New(st, "")
+	ts := httptest.NewServer(app.Routes())
+	t.Cleanup(ts.Close)
+
+	cmd := NewRootCmd()
+	var stdout bytes.Buffer
+	cmd.SetOut(&stdout)
+	cmd.SetErr(&stdout)
+	cmd.SetArgs([]string{
+		"--server", ts.URL,
+		"--actor", "tester",
+		"--json",
+		"threads", "reply", docPath, thread.ID,
+		"--body-file", replyPath,
+	})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("execute cli: %v", err)
+	}
+	if !strings.Contains(stdout.String(), `"body": "Handled.\n\nI updated the section."`) {
+		t.Fatalf("expected reply body in output, got %s", stdout.String())
+	}
+}
+
 func TestInstallSkillWritesBundledFiles(t *testing.T) {
 	targetSkillsDir := filepath.Join(t.TempDir(), "skills")
 
