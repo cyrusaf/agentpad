@@ -59,8 +59,63 @@ describe("remoteArtifacts", () => {
         id: "remote-artifact-2",
         kind: "delete",
         author: "pair",
-        position: 6,
+        position: 10,
         text: "beta",
+      },
+    ]);
+  });
+
+  it("uses token-level replacement artifacts instead of whole-span highlights", () => {
+    const source = "Alpha beta gamma.";
+    const op: Operation = {
+      position: 0,
+      delete_count: source.length,
+      insert_text: "Alpha brave beta gamma.",
+      base_revision: 0,
+      author: "pair",
+    };
+
+    const next = applyOperation(source, op);
+    const artifacts = buildRemoteArtifactsForOperation(source, next, op);
+
+    expect(artifacts).toEqual([
+      {
+        id: "remote-artifact-1",
+        kind: "insert",
+        author: "pair",
+        from: 6,
+        to: 12,
+      },
+    ]);
+  });
+
+  it("anchors replacement artifacts at the changed token subsection", () => {
+    const source = "Second paragraph for replacement testing.";
+    const op: Operation = {
+      position: 0,
+      delete_count: source.length,
+      insert_text: "Second paragraph for swap testing.",
+      base_revision: 0,
+      author: "pair",
+    };
+
+    const next = applyOperation(source, op);
+    const artifacts = buildRemoteArtifactsForOperation(source, next, op);
+
+    expect(artifacts).toEqual([
+      {
+        id: "remote-artifact-1",
+        kind: "replace",
+        author: "pair",
+        from: 21,
+        to: 25,
+      },
+      {
+        id: "remote-artifact-2",
+        kind: "delete",
+        author: "pair",
+        position: 25,
+        text: "replacement",
       },
     ]);
   });

@@ -16,6 +16,7 @@
     "@codemirror/state": "^6.5.2",
     "@codemirror/view": "^6.38.6",
     "codemirror": "^6.0.2",
+    "diff": "^8.0.4",
     "react": "^19.0.0",
     "react-dom": "^19.0.0"
   },

@@ -6,7 +6,7 @@ import { Decoration, type DecorationSet, EditorView, keymap, WidgetType } from "
 
 import { wsURL } from "../lib/api";
 import type { Document, LiveMessage, Operation, Presence, SelectionRange, Thread } from "../lib/types";
-import { applyOperation, sliceByCodePoint, toCodePointOffset, toCodeUnitOffset, transformAgainst } from "../lib/ot";
+import { applyOperation, sliceByCodePoint, toCodePointOffset, toCodeUnitOffset, toEditorChange, transformAgainst } from "../lib/ot";
 import {
   buildRemoteArtifactsForOperation,
   getRemoteArtifactTitle,
@@ -218,7 +218,7 @@ function buildRemoteDecorations(artifacts: RemoteArtifact[]) {
         artifact.position,
         Decoration.widget({
           widget: new DeletedTextWidget(artifact),
-          side: -1,
+          side: 1,
         }),
       );
       continue;
@@ -570,8 +570,9 @@ export const EditorPane = forwardRef<EditorPaneHandle, EditorPaneProps>(function
                 author: canonical.author,
               })
             : [];
+        const remoteChange = toEditorChange(previousSource, incoming);
         viewRef.current.dispatch({
-          changes: { from: 0, to: viewRef.current.state.doc.length, insert: nextSource },
+          changes: remoteChange,
           annotations: remoteAnnotation.of(true),
           effects: nextRemoteArtifacts.length > 0 ? addRemoteArtifacts.of(nextRemoteArtifacts) : [],
         });

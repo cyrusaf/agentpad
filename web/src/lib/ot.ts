@@ -1,5 +1,11 @@
 import type { Operation } from "./types";
 
+export interface EditorChangeSpec {
+  from: number;
+  to: number;
+  insert: string;
+}
+
 export function runeLength(text: string) {
   return Array.from(text).length;
 }
@@ -60,4 +66,12 @@ export function applyOperation(source: string, op: Operation) {
     ...insert,
     ...runes.slice(op.position + op.delete_count),
   ].join("");
+}
+
+export function toEditorChange(source: string, op: Operation): EditorChangeSpec {
+  return {
+    from: toCodeUnitOffset(source, op.position),
+    to: toCodeUnitOffset(source, op.position + op.delete_count),
+    insert: op.insert_text,
+  };
 }
