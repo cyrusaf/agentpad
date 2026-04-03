@@ -1,0 +1,9 @@
+[server]
+address = "127.0.0.1:8081"
+base_url = "http://127.0.0.1:8081"
+
+[storage]
+path = "./docs/demo/.agentpad"
+
+[identity]
+name = "Agent"

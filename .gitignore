@@ -1,0 +1,16 @@
+.DS_Store
+agentpad.db
+web/node_modules
+web/dist
+web/tsconfig.tsbuildinfo
+web/tsconfig.node.tsbuildinfo
+web/vite.config.js
+web/vite.config.d.ts
+playwright-report
+test-results
+docs/demo/.agentpad/
+docs/demo/.bin/
+docs/videos/agentpad-browser-human-codex.webm
+docs/videos/agentpad-codex-terminal.cast
+docs/videos/agentpad-codex-terminal.gif
+docs/videos/agentpad-vertical-codex-demo.mp4
