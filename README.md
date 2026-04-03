@@ -1,53 +1,67 @@
 # AgentPad
 
-AgentPad is a local-first review workspace for humans and coding agents. It lets you open a real file, leave threaded comments anchored to exact text, and collaborate through a shared browser UI plus CLI workflow.
+AgentPad is a local-first review workspace for humans and coding agents. Open a real file, discuss it in threaded comments anchored to exact text, and let agents update the document through the same collaboration layer.
 
 https://github.com/user-attachments/assets/9ec7d0c0-871a-4589-8e4e-9aa9cddd0093
 
+## How It Works
+
+- The `agentpad` CLI opens a real local file and talks to the AgentPad server.
+- The server keeps comments, anchors, and edits in sync while preserving the file as a normal file on disk.
+- The browser UI is where humans and agents review the document together.
+- Edits still land back in the local file, so you can keep using your normal tools and workflows.
+
+```mermaid
+flowchart LR
+    C["agentpad CLI"] --> S["AgentPad server"]
+    B["Browser UI"] --> S
+    A["Codex or other agent"] --> S
+    S <--> F["Local file"]
+```
+
 ## Quickstart
 
-**Installation**
+### 1. Install
 
 ```bash
 go install github.com/cyrusaf/agentpad@latest
 agentpad install-skill
 ```
 
-**Usage**
-
-Start AgentPad:
+### 2. Start AgentPad
 
 ```bash
 agentpad serve
 ```
 
-Open the local file in the AgentPad UI:
+Then open `http://127.0.0.1:8080` in your browser.
+
+### 3. Open a file
 
 ```bash
-agentpad open /path/to/file
+agentpad open /path/to/file.md
 ```
 
-Then run Codex with the AgentPad skill on a local file:
+That opens the local file in the AgentPad UI so you can read it, comment on it, and share the same document with an agent.
+
+### 4. Ask Codex to work in AgentPad
 
 ```text
-Use $agentpad to review /path/to/file in AgentPad.
+Use $agentpad to review /path/to/file.md in AgentPad.
 Start the AgentPad server if needed.
+Reply in existing AgentPad threads instead of editing sidecar metadata directly.
 When you need to update the document, use agentpad read --json to get an anchor and then use agentpad edit with that anchor.
 For multiline inserts or replies, prefer agentpad edit --text-file / agentpad threads reply --body-file so real newlines are preserved.
-Reply in existing AgentPad threads instead of editing sidecar metadata directly.
 ```
 
-## CLI Example
+## Advanced CLI Flow
 
-The CLI is primarily for the agent to use when interacting with AgentPad.
+The CLI is mainly useful for agents and automation once the basic workflow above is working.
 
 ```bash
-agentpad open ./plan.md
 agentpad open ./plan.md --json
 agentpad read ./plan.md --quote "rollback signal" --prefix "define the " --json
 agentpad edit ./plan.md --anchor-file /tmp/anchor.json --text "rollback threshold" --json
-printf '\n\nrollback threshold' > /tmp/replacement.txt
-agentpad edit ./plan.md --anchor-file /tmp/anchor.json --text-file /tmp/replacement.txt --json
 agentpad threads create ./plan.md --start 120 --end 168 --body "Split this into two PRs." --json
 ```
 
