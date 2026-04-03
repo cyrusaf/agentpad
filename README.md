@@ -2,7 +2,7 @@
 
 AgentPad is a local-first review workspace for humans and coding agents. It lets you open a real file, leave threaded comments anchored to exact text, and collaborate through a shared browser UI plus CLI workflow.
 
-docs/videos/agentpad-vertical-codex-demo.mp4
+https://github.com/user-attachments/assets/9ec7d0c0-871a-4589-8e4e-9aa9cddd0093
 
 ## Quickstart
 
@@ -21,13 +21,16 @@ Start AgentPad:
 agentpad serve
 ```
 
+Open the local file in the AgentPad UI:
+
+```bash
+agentpad open /path/to/file
+```
+
 Then run Codex with the AgentPad skill on a local file:
 
 ```text
-Use $agentpad to review /absolute/path/to/plan.md in AgentPad.
-Start the AgentPad server if needed.
-When you need to update the document, use agentpad read --json to get an anchor and then use agentpad edit with that anchor.
-Reply in existing AgentPad threads instead of editing sidecar metadata directly.
+Use $agentpad to review /path/to/file in AgentPad.
 ```
 
 ## What It Feels Like
