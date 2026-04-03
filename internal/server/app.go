@@ -120,25 +120,28 @@ func (a *App) handleEditFile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var (
+		actor     = actorFromRequest(r)
 		doc       domain.Document
 		canonical collab.Op
 		err       error
 	)
 	if req.Anchor != nil {
-		doc, canonical, err = a.store.ApplyAnchorEdit(r.Context(), req.Path, *req.Anchor, req.InsertText, actorFromRequest(r))
+		doc, canonical, err = a.store.ApplyAnchorEdit(r.Context(), req.Path, *req.Anchor, req.InsertText, actor)
 	} else {
 		doc, canonical, err = a.store.ApplyOp(r.Context(), req.Path, collab.Op{
 			Position:     req.Position,
 			DeleteCount:  req.DeleteCount,
 			InsertText:   req.InsertText,
 			BaseRevision: req.BaseRevision,
-		}, actorFromRequest(r))
+			Author:       actor,
+		}, actor)
 	}
 	if err != nil {
 		writeError(w, err)
 		return
 	}
-	a.hub.NotifyDocument(doc.ID, "document", map[string]any{"revision": doc.Revision})
+	canonical.Author = actor
+	a.hub.NotifyOpApplied(doc.ID, doc.Revision, canonical)
 	writeJSON(w, http.StatusOK, map[string]any{"document": doc, "op": canonical})
 }
 

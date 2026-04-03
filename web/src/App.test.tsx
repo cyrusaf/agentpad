@@ -61,8 +61,8 @@ describe("App", () => {
     expect(screen.getByTestId("editor-pane")).toBeTruthy();
   });
 
-  it("extracts a file path from a comment-prefixed uri list", () => {
-    const path = extractDroppedPathFromDataTransfer({
+  it("extracts a file path from a comment-prefixed uri list", async () => {
+    const path = await extractDroppedPathFromDataTransfer({
       files: [] as unknown as FileList,
       getData: (type: string) => (type === "text/uri-list" ? "# Finder selection\r\nfile:///Users/tester/spec.md\r\n" : ""),
     });
@@ -70,8 +70,8 @@ describe("App", () => {
     expect(path).toBe("/Users/tester/spec.md");
   });
 
-  it("extracts a file path from browser-specific drop formats", () => {
-    const path = extractDroppedPathFromDataTransfer({
+  it("extracts a file path from browser-specific drop formats", async () => {
+    const path = await extractDroppedPathFromDataTransfer({
       files: [] as unknown as FileList,
       getData: (type: string) => {
         if (type === "DownloadURL") {

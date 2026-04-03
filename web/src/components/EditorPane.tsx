@@ -2,14 +2,65 @@ import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from "re
 import { basicSetup } from "codemirror";
 import { markdown } from "@codemirror/lang-markdown";
 import { Annotation, EditorSelection, EditorState, RangeSetBuilder, StateEffect, StateField } from "@codemirror/state";
-import { Decoration, type DecorationSet, EditorView, keymap } from "@codemirror/view";
+import { Decoration, type DecorationSet, EditorView, keymap, WidgetType } from "@codemirror/view";
 
 import { wsURL } from "../lib/api";
 import type { Document, LiveMessage, Operation, Presence, SelectionRange, Thread } from "../lib/types";
 import { applyOperation, sliceByCodePoint, toCodePointOffset, toCodeUnitOffset, transformAgainst } from "../lib/ot";
+import {
+  buildRemoteArtifactsForOperation,
+  getRemoteArtifactTitle,
+  mapRemoteArtifacts,
+  type RemoteArtifact,
+  type RemoteDeleteArtifact,
+} from "../lib/remoteArtifacts";
 
 const remoteAnnotation = Annotation.define<boolean>();
 const setThreadDecorations = StateEffect.define<DecorationSet>();
+const addRemoteArtifacts = StateEffect.define<RemoteArtifact[]>();
+const clearRemoteArtifact = StateEffect.define<string>();
+
+interface RemoteDecorationState {
+  artifacts: RemoteArtifact[];
+  decorations: DecorationSet;
+}
+
+class DeletedTextWidget extends WidgetType {
+  constructor(private artifact: RemoteDeleteArtifact) {
+    super();
+  }
+
+  eq(other: DeletedTextWidget) {
+    return (
+      other.artifact.id === this.artifact.id &&
+      other.artifact.text === this.artifact.text &&
+      other.artifact.author === this.artifact.author
+    );
+  }
+
+  toDOM() {
+    const wrapper = document.createElement("span");
+    wrapper.className = "cm-remote-change cm-remote-change-delete";
+    wrapper.dataset.remoteArtifactId = this.artifact.id;
+    wrapper.dataset.remoteArtifactKind = this.artifact.kind;
+    wrapper.title = getRemoteArtifactTitle(this.artifact);
+
+    const deletedText = document.createElement("span");
+    deletedText.className = "cm-remote-change-delete-text";
+    deletedText.textContent = this.artifact.text;
+
+    const authorChip = document.createElement("span");
+    authorChip.className = "cm-remote-change-author";
+    authorChip.textContent = this.artifact.author;
+
+    wrapper.append(deletedText, authorChip);
+    return wrapper;
+  }
+
+  ignoreEvent() {
+    return false;
+  }
+}
 
 const threadDecorationField = StateField.define<DecorationSet>({
   create: () => Decoration.none,
@@ -23,6 +74,41 @@ const threadDecorationField = StateField.define<DecorationSet>({
     return value;
   },
   provide: (field) => EditorView.decorations.from(field),
+});
+
+const remoteDecorationField = StateField.define<RemoteDecorationState>({
+  create: () => ({
+    artifacts: [],
+    decorations: Decoration.none,
+  }),
+  update(value, transaction) {
+    let artifacts = transaction.docChanged ? mapRemoteArtifacts(value.artifacts, transaction.changes) : value.artifacts;
+    let shouldRebuild = transaction.docChanged;
+
+    for (const effect of transaction.effects) {
+      if (effect.is(addRemoteArtifacts)) {
+        artifacts = [...artifacts, ...effect.value];
+        shouldRebuild = true;
+      }
+      if (effect.is(clearRemoteArtifact)) {
+        const nextArtifacts = artifacts.filter((artifact) => artifact.id !== effect.value);
+        if (nextArtifacts.length !== artifacts.length) {
+          artifacts = nextArtifacts;
+          shouldRebuild = true;
+        }
+      }
+    }
+
+    if (!shouldRebuild) {
+      return value;
+    }
+
+    return {
+      artifacts,
+      decorations: buildRemoteDecorations(artifacts),
+    };
+  },
+  provide: (field) => EditorView.decorations.from(field, (value) => value.decorations),
 });
 
 export interface EditorPaneHandle {
@@ -82,6 +168,53 @@ function buildThreadDecorations(source: string, threads: Thread[], activeThreadI
       to,
       Decoration.mark({
         class: `cm-thread-highlight ${thread.id === activeThreadId ? "cm-thread-highlight-active" : ""}`,
+      }),
+    );
+  }
+
+  return builder.finish();
+}
+
+function buildRemoteDecorations(artifacts: RemoteArtifact[]) {
+  const builder = new RangeSetBuilder<Decoration>();
+  const sortedArtifacts = [...artifacts].sort((left, right) => {
+    const leftPosition = left.kind === "delete" ? left.position : left.from;
+    const rightPosition = right.kind === "delete" ? right.position : right.from;
+    if (leftPosition !== rightPosition) {
+      return leftPosition - rightPosition;
+    }
+    if (left.kind === "delete" && right.kind !== "delete") {
+      return -1;
+    }
+    if (left.kind !== "delete" && right.kind === "delete") {
+      return 1;
+    }
+    return left.id.localeCompare(right.id);
+  });
+
+  for (const artifact of sortedArtifacts) {
+    if (artifact.kind === "delete") {
+      builder.add(
+        artifact.position,
+        artifact.position,
+        Decoration.widget({
+          widget: new DeletedTextWidget(artifact),
+          side: -1,
+        }),
+      );
+      continue;
+    }
+
+    builder.add(
+      artifact.from,
+      artifact.to,
+      Decoration.mark({
+        class: `cm-remote-change cm-remote-change-${artifact.kind}`,
+        attributes: {
+          "data-remote-artifact-id": artifact.id,
+          "data-remote-artifact-kind": artifact.kind,
+          title: getRemoteArtifactTitle(artifact),
+        },
       }),
     );
   }
@@ -187,6 +320,7 @@ export const EditorPane = forwardRef<EditorPaneHandle, EditorPaneProps>(function
         keymap.of([]),
         EditorView.lineWrapping,
         threadDecorationField,
+        remoteDecorationField,
         EditorView.theme({
           "&": {
             height: "100%",
@@ -198,6 +332,14 @@ export const EditorPane = forwardRef<EditorPaneHandle, EditorPaneProps>(function
         }),
         EditorView.domEventHandlers({
           click(event, view) {
+            const remoteArtifactID = (event.target as HTMLElement | null)?.closest<HTMLElement>("[data-remote-artifact-id]")
+              ?.dataset.remoteArtifactId;
+            if (remoteArtifactID) {
+              view.dispatch({
+                effects: clearRemoteArtifact.of(remoteArtifactID),
+              });
+              return true;
+            }
             if (!view.state.selection.main.empty) {
               return false;
             }
@@ -400,10 +542,19 @@ export const EditorPane = forwardRef<EditorPaneHandle, EditorPaneProps>(function
             return transformAgainst(localOp, canonical);
           });
         }
-        const nextSource = applyOperation(viewRef.current.state.doc.toString(), incoming);
+        const previousSource = viewRef.current.state.doc.toString();
+        const nextSource = applyOperation(previousSource, incoming);
+        const nextRemoteArtifacts =
+          canonical.author && canonical.author !== actor
+            ? buildRemoteArtifactsForOperation(previousSource, nextSource, {
+                ...incoming,
+                author: canonical.author,
+              })
+            : [];
         viewRef.current.dispatch({
           changes: { from: 0, to: viewRef.current.state.doc.length, insert: nextSource },
           annotations: remoteAnnotation.of(true),
+          effects: nextRemoteArtifacts.length > 0 ? addRemoteArtifacts.of(nextRemoteArtifacts) : [],
         });
         serverRevisionRef.current = message.revision ?? serverRevisionRef.current + 1;
         onRevisionChange(serverRevisionRef.current, nextSource);

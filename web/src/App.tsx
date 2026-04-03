@@ -3,6 +3,7 @@ import type { CSSProperties, ChangeEvent, DragEvent, FormEvent, PointerEvent as 
 
 import { EditorPane, type EditorPaneHandle } from "./components/EditorPane";
 import { api } from "./lib/api";
+import { clearUnreadThreadState, diffUnreadThreadActivity } from "./lib/threadHighlights";
 import type { Document, Presence, SelectionRange, Thread } from "./lib/types";
 
 interface RouteState {
@@ -238,6 +239,8 @@ export default function App() {
   const [selection, setSelection] = useState<SelectionRange | null>(null);
   const [presence, setPresence] = useState<Presence[]>([]);
   const [threads, setThreads] = useState<Thread[]>([]);
+  const [unreadThreadIds, setUnreadThreadIds] = useState<Set<string>>(() => new Set());
+  const [unreadCommentIds, setUnreadCommentIds] = useState<Set<string>>(() => new Set());
   const [status, setStatus] = useState("Open a local file to begin.");
   const [commentBody, setCommentBody] = useState("");
   const [replyDrafts, setReplyDrafts] = useState<Record<string, string>>({});
@@ -247,6 +250,7 @@ export default function App() {
   const editorRef = useRef<EditorPaneHandle | null>(null);
   const dropInputRef = useRef<HTMLInputElement | null>(null);
   const lastFocusedThreadRef = useRef<string | null>(null);
+  const previousThreadsRef = useRef<Thread[]>([]);
   const dragDepthRef = useRef(0);
   const resizeStateRef = useRef<{ startX: number; startWidth: number } | null>(null);
   const activeThreadId = route.threadId;
@@ -270,11 +274,54 @@ export default function App() {
     setOpenPath(nextRoute.path ?? "");
   });
 
-  const refreshThreads = useEffectEvent(async (path: string) => {
+  const refreshThreads = useEffectEvent(async (path: string, mode: "load" | "local" | "live" = "local") => {
     const nextThreads = await api.listThreads(path);
+    const previousThreads = previousThreadsRef.current;
+    previousThreadsRef.current = nextThreads ?? [];
+    const unreadDiff =
+      mode === "live" ? diffUnreadThreadActivity(previousThreads, nextThreads ?? [], actor, route.threadId) : null;
     startTransition(() => {
       setThreads(nextThreads ?? []);
+      if (mode === "load") {
+        setUnreadThreadIds(new Set());
+        setUnreadCommentIds(new Set());
+        return;
+      }
+      if (!unreadDiff) {
+        return;
+      }
+      if (unreadDiff.threadIds.length > 0) {
+        setUnreadThreadIds((current) => {
+          const next = new Set(current);
+          for (const threadID of unreadDiff.threadIds) {
+            next.add(threadID);
+          }
+          return next;
+        });
+      }
+      if (unreadDiff.commentIds.length > 0) {
+        setUnreadCommentIds((current) => {
+          const next = new Set(current);
+          for (const commentID of unreadDiff.commentIds) {
+            next.add(commentID);
+          }
+          return next;
+        });
+      }
     });
+  });
+
+  const clearThreadUnread = useEffectEvent((threadID: string, sourceThreads: Thread[] = threads) => {
+    const nextUnreadState = clearUnreadThreadState(threadID, sourceThreads, {
+      threadIds: unreadThreadIds,
+      commentIds: unreadCommentIds,
+    });
+    if (nextUnreadState.threadIds !== unreadThreadIds) {
+      setUnreadThreadIds(new Set(nextUnreadState.threadIds));
+    }
+    if (nextUnreadState.commentIds !== unreadCommentIds) {
+      setUnreadCommentIds(new Set(nextUnreadState.commentIds));
+    }
   });
 
   const loadDocument = useEffectEvent(async (path: string) => {
@@ -287,7 +334,7 @@ export default function App() {
       setOpenPath(doc.id);
       setStatus(`Opened ${doc.title}`);
     });
-    await refreshThreads(doc.id);
+    await refreshThreads(doc.id, "load");
   });
 
   const handleDocumentArtifactHint = useEffectEvent(() => {
@@ -298,7 +345,7 @@ export default function App() {
 
   const handleThreadsArtifactHint = useEffectEvent(() => {
     if (currentDoc) {
-      void refreshThreads(currentDoc.id);
+      void refreshThreads(currentDoc.id, "live");
     }
   });
 
@@ -368,6 +415,9 @@ export default function App() {
 
   useEffect(() => {
     lastFocusedThreadRef.current = null;
+    previousThreadsRef.current = [];
+    setUnreadThreadIds(new Set());
+    setUnreadCommentIds(new Set());
   }, [route.path]);
 
   useEffect(() => {
@@ -378,6 +428,8 @@ export default function App() {
         setSelection(null);
         setPresence([]);
         setThreads([]);
+        setUnreadThreadIds(new Set());
+        setUnreadCommentIds(new Set());
         setCommentBody("");
         setReplyDrafts({});
         setStatus("Open a local file to begin.");
@@ -392,6 +444,8 @@ export default function App() {
       setThreads([]);
       setPresence([]);
       setSelection(null);
+      setUnreadThreadIds(new Set());
+      setUnreadCommentIds(new Set());
       setCommentBody("");
       setReplyDrafts({});
     });
@@ -413,6 +467,13 @@ export default function App() {
     const activeCard = window.document.querySelector<HTMLElement>(`[data-thread-card="${activeThreadId}"]`);
     activeCard?.scrollIntoView({ block: "nearest" });
   }, [activeThreadId]);
+
+  useEffect(() => {
+    if (!activeThreadId) {
+      return;
+    }
+    clearThreadUnread(activeThreadId, threads);
+  }, [activeThreadId, threads]);
 
   useEffect(() => {
     if (!activeThreadId || activeThreadId === lastFocusedThreadRef.current) {
@@ -470,7 +531,7 @@ export default function App() {
     setCommentBody("");
     setSelection(null);
     editorRef.current?.clearSelection();
-    await refreshThreads(currentDoc.id);
+    await refreshThreads(currentDoc.id, "local");
     navigateTo({ path: currentDoc.id, threadId: created.id }, "replace");
     setStatus("Comment added");
   }
@@ -482,7 +543,7 @@ export default function App() {
     }
     await api.replyThread(currentDoc.id, threadID, body);
     setReplyDrafts((current) => ({ ...current, [threadID]: "" }));
-    await refreshThreads(currentDoc.id);
+    await refreshThreads(currentDoc.id, "local");
     setStatus("Reply added");
   }
 
@@ -497,7 +558,7 @@ export default function App() {
       await api.reopenThread(currentDoc.id, threadID);
       setStatus("Comment reopened");
     }
-    await refreshThreads(currentDoc.id);
+    await refreshThreads(currentDoc.id, "local");
   }
 
   async function copyLink() {
@@ -513,6 +574,7 @@ export default function App() {
     if (!currentDoc) {
       return;
     }
+    clearThreadUnread(threadID, threads);
     setCommentsCollapsed(false);
     navigateTo({ path: currentDoc.id, threadId: threadID }, "replace");
   }
@@ -821,18 +883,29 @@ export default function App() {
                 <div className="thread-list">
                   {orderedThreads.map((thread) => {
                     const isActive = thread.id === activeThreadId;
+                    const unreadCommentCount = (thread.comments ?? []).filter((comment) => unreadCommentIds.has(comment.id)).length;
+                    const isUnread = unreadThreadIds.has(thread.id) || unreadCommentCount > 0;
                     return (
-                      <article key={thread.id} className={`thread-card ${isActive ? "thread-card-active" : ""}`} data-thread-card={thread.id}>
+                      <article
+                        key={thread.id}
+                        className={`thread-card ${isActive ? "thread-card-active" : ""} ${isUnread ? "thread-card-unread" : ""}`}
+                        data-thread-card={thread.id}
+                      >
                         <div className="thread-card-header">
                           <span className={`thread-state ${thread.status === "resolved" ? "thread-state-resolved" : ""}`}>{thread.status}</span>
                           <div className="thread-meta">
                             <span>{thread.comments.length} comment{thread.comments.length === 1 ? "" : "s"}</span>
+                            {unreadCommentCount > 0 ? <span className="thread-unread-badge">{unreadCommentCount} new</span> : null}
                             <span>{formatTimestamp(thread.updated_at)}</span>
                           </div>
                         </div>
 
                         <blockquote className="thread-quote-block">
-                          <button className="thread-quote-button" onClick={() => openThread(thread.id)} title={thread.anchor.quote}>
+                          <button
+                            className={`thread-quote-button ${isUnread ? "thread-quote-button-unread" : ""}`}
+                            onClick={() => openThread(thread.id)}
+                            title={thread.anchor.quote}
+                          >
                             <span className="thread-quote">{formatQuote(thread)}</span>
                           </button>
                         </blockquote>
@@ -841,7 +914,10 @@ export default function App() {
                           <div className="thread-detail">
                             <div className="comment-list">
                               {(thread.comments ?? []).map((comment) => (
-                                <div key={comment.id} className="comment-bubble">
+                                <div
+                                  key={comment.id}
+                                  className={`comment-bubble ${unreadCommentIds.has(comment.id) ? "comment-bubble-unread" : ""}`}
+                                >
                                   <div className="comment-bubble-meta">
                                     <strong>{comment.author}</strong>
                                     <span>{formatTimestamp(comment.created_at)}</span>

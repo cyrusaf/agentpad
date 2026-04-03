@@ -147,6 +147,14 @@ func (h *Hub) NotifyDocument(documentID, artifact string, data map[string]any) {
 	})
 }
 
+func (h *Hub) NotifyOpApplied(documentID string, revision int64, op collab.Op) {
+	h.broadcast(documentID, "", serverMessage{
+		Type:     "op.applied",
+		Revision: revision,
+		Op:       &op,
+	})
+}
+
 func (h *Hub) addClient(documentID string, c *client) {
 	h.mu.Lock()
 	room, ok := h.rooms[documentID]

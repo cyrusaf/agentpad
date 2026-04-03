@@ -593,6 +593,18 @@ p {
   background: #fff9eb;
 }
 
+.thread-card-unread {
+  border-color: #86efac;
+  background: #f0fdf4;
+  box-shadow: inset 0 0 0 1px rgba(34, 197, 94, 0.14);
+}
+
+.thread-card-active.thread-card-unread {
+  background:
+    linear-gradient(180deg, rgba(240, 253, 244, 0.92) 0%, rgba(255, 249, 235, 0.98) 100%);
+  box-shadow: inset 0 0 0 1px rgba(34, 197, 94, 0.24);
+}
+
 .thread-card-header {
   display: flex;
   align-items: center;
@@ -657,6 +669,11 @@ p {
   background: transparent;
 }
 
+.thread-quote-button-unread .thread-quote {
+  color: #166534;
+  font-weight: 600;
+}
+
 .thread-quote {
   display: block;
   white-space: normal;
@@ -691,6 +708,17 @@ p {
   gap: 0.5rem;
 }
 
+.thread-unread-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.15rem 0.45rem;
+  border-radius: 999px;
+  background: #dcfce7;
+  color: #166534;
+  font-size: 0.72rem;
+  font-weight: 700;
+}
+
 .comment-bubble {
   display: grid;
   gap: 0.25rem;
@@ -698,6 +726,11 @@ p {
   border: 1px solid #d1d5db;
   border-radius: 8px;
   background: #ffffff;
+}
+
+.comment-bubble-unread {
+  border-color: #86efac;
+  background: #f0fdf4;
 }
 
 .comment-bubble p {
@@ -740,6 +773,45 @@ p {
 
 .cm-thread-highlight-active {
   background: rgba(250, 204, 21, 0.5);
+}
+
+.cm-remote-change {
+  border-radius: 0.22rem;
+}
+
+.cm-remote-change-insert,
+.cm-remote-change-replace {
+  background: rgba(34, 197, 94, 0.22);
+  box-shadow: inset 0 -1px 0 rgba(22, 101, 52, 0.45);
+}
+
+.cm-remote-change-delete {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.38rem;
+  margin-right: 0.2rem;
+  padding: 0.02rem 0.32rem;
+  border-radius: 999px;
+  background: rgba(254, 226, 226, 0.92);
+  color: #991b1b;
+  vertical-align: baseline;
+}
+
+.cm-remote-change-delete-text {
+  text-decoration: line-through;
+  text-decoration-thickness: 1.5px;
+}
+
+.cm-remote-change-author {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.05rem 0.38rem;
+  border-radius: 999px;
+  background: rgba(153, 27, 27, 0.12);
+  color: #7f1d1d;
+  font-size: 0.72rem;
+  font-weight: 700;
+  line-height: 1.2;
 }
 
 @media (max-width: 1100px) {
