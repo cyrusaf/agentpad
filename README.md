@@ -2,7 +2,7 @@
 
 AgentPad is a local-first review workspace for humans and coding agents. Open a real file, discuss it in threaded comments anchored to exact text, and let agents update the document through the same collaboration layer.
 
-https://github.com/user-attachments/assets/9ec7d0c0-871a-4589-8e4e-9aa9cddd0093
+https://github.com/user-attachments/assets/3a19d543-508c-4042-b814-1d65f7afaf07
 
 ## How It Works
 
