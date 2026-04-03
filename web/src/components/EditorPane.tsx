@@ -43,11 +43,11 @@ class DeletedTextWidget extends WidgetType {
     wrapper.className = "cm-remote-change cm-remote-change-delete";
     wrapper.dataset.remoteArtifactId = this.artifact.id;
     wrapper.dataset.remoteArtifactKind = this.artifact.kind;
-    wrapper.title = getRemoteArtifactTitle(this.artifact);
+    wrapper.title = formatDeletedArtifactTitle(this.artifact);
 
     const deletedText = document.createElement("span");
     deletedText.className = "cm-remote-change-delete-text";
-    deletedText.textContent = this.artifact.text;
+    deletedText.textContent = formatDeletedTextPreview(this.artifact.text);
 
     const authorChip = document.createElement("span");
     authorChip.className = "cm-remote-change-author";
@@ -60,6 +60,22 @@ class DeletedTextWidget extends WidgetType {
   ignoreEvent() {
     return false;
   }
+}
+
+function formatDeletedTextPreview(text: string) {
+  const normalized = text.replace(/\s+/g, " ").trim();
+  if (!normalized) {
+    return "deleted text";
+  }
+  return normalized.length > 72 ? `${normalized.slice(0, 69)}...` : normalized;
+}
+
+function formatDeletedArtifactTitle(artifact: RemoteDeleteArtifact) {
+  const preview = artifact.text.trim();
+  if (!preview) {
+    return getRemoteArtifactTitle(artifact);
+  }
+  return `${getRemoteArtifactTitle(artifact)}\n${preview}`;
 }
 
 const threadDecorationField = StateField.define<DecorationSet>({

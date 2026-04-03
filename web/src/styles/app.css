@@ -797,14 +797,20 @@ p {
   align-items: center;
   gap: 0.38rem;
   margin-right: 0.2rem;
-  padding: 0.02rem 0.32rem;
-  border-radius: 999px;
-  background: rgba(254, 226, 226, 0.92);
   color: #991b1b;
   vertical-align: baseline;
+  max-width: min(44ch, calc(100vw - 8rem));
 }
 
 .cm-remote-change-delete-text {
+  display: inline-block;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  padding: 0.02rem 0.32rem;
+  border-radius: 0.42rem;
+  background: rgba(254, 226, 226, 0.92);
   text-decoration: line-through;
   text-decoration-thickness: 1.5px;
 }
